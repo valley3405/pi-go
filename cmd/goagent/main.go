@@ -150,7 +150,7 @@ func resolveAPIKey(provider string) string {
 // ---- print 模式 ----
 
 func runPrint(h *harness.Harness, prompt string) int {
-	unsub := h.Agent.Subscribe(printSubscriber)
+	unsub := h.Agent.Subscribe(printSubscriber(true)) // -p 模式输出思考过程
 	defer unsub()
 	if err := h.Prompt(context.Background(), prompt); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -165,20 +165,39 @@ func runPrint(h *harness.Harness, prompt string) int {
 }
 
 // printSubscriber 流式打印文本增量 + 工具执行摘要。
-func printSubscriber(ev agent.Event) {
-	switch ev.Type {
-	case agent.EventMessageUpdate:
-		if ev.StreamEvent != nil && ev.StreamEvent.Type == llm.EventTextDelta {
-			fmt.Print(ev.StreamEvent.Delta)
+// showThinking 为 true 时额外输出模型的思考过程（thinking_delta）。
+func printSubscriber(showThinking bool) func(agent.Event) {
+	return func(ev agent.Event) {
+		switch ev.Type {
+		case agent.EventMessageUpdate:
+			if ev.StreamEvent == nil {
+				return
+			}
+			switch ev.StreamEvent.Type {
+			case llm.EventTextDelta:
+				fmt.Print(ev.StreamEvent.Delta)
+			case llm.EventThinkingStart:
+				if showThinking {
+					fmt.Print("\n\x1b[2m[thinking] ")
+				}
+			case llm.EventThinkingDelta:
+				if showThinking {
+					fmt.Print(ev.StreamEvent.Delta)
+				}
+			case llm.EventThinkingEnd:
+				if showThinking {
+					fmt.Print("\x1b[0m\n")
+				}
+			}
+		case agent.EventToolExecutionStart:
+			fmt.Printf("\n[tool] %s %s\n", ev.ToolName, truncate(string(ev.Args), 120))
+		case agent.EventToolExecutionEnd:
+			mark := "ok"
+			if ev.IsError {
+				mark = "ERR"
+			}
+			fmt.Printf("[tool:%s] %s done\n", ev.ToolName, mark)
 		}
-	case agent.EventToolExecutionStart:
-		fmt.Printf("\n[tool] %s %s\n", ev.ToolName, truncate(string(ev.Args), 120))
-	case agent.EventToolExecutionEnd:
-		mark := "ok"
-		if ev.IsError {
-			mark = "ERR"
-		}
-		fmt.Printf("[tool:%s] %s done\n", ev.ToolName, mark)
 	}
 }
 
@@ -190,7 +209,7 @@ func runInteractive(h *harness.Harness) {
 		fmt.Println("session:", h.Session.Path())
 	}
 
-	unsub := h.Agent.Subscribe(printSubscriber)
+	unsub := h.Agent.Subscribe(printSubscriber(false))
 	defer unsub()
 
 	scanner := bufio.NewScanner(os.Stdin)

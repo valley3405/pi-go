@@ -90,8 +90,9 @@ type oaiToolCall struct {
 type oaiChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string        `json:"content"`
-			ToolCalls []oaiToolCall `json:"tool_calls"`
+			Content          string        `json:"content"`
+			ReasoningContent string        `json:"reasoning_content"` // 推理模型（DeepSeek-R1、QwQ 等）的思考增量
+			ToolCalls        []oaiToolCall `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -214,6 +215,8 @@ func consumeOAISSE(r io.Reader, model Model, s *EventStream) error {
 
 	textOpen := false
 	textBuf := ""
+	thinkingOpen := false
+	thinkingBuf := ""
 	// 按 index 合并流式 tool_calls
 	type tcAcc struct {
 		id, name, args string
@@ -251,7 +254,23 @@ func consumeOAISSE(r io.Reader, model Model, s *EventStream) error {
 		if choice.FinishReason != "" {
 			finishReason = choice.FinishReason
 		}
+		if d := choice.Delta.ReasoningContent; d != "" {
+			if !thinkingOpen {
+				s.Push(Event{Type: EventThinkingStart, Partial: partial})
+				thinkingOpen = true
+			}
+			thinkingBuf += d
+			p := partial
+			p.Content = append(append([]Content{}, partial.Content...), &ThinkingContent{Thinking: thinkingBuf})
+			s.Push(Event{Type: EventThinkingDelta, Delta: d, Partial: p})
+		}
 		if d := choice.Delta.Content; d != "" {
+			if thinkingOpen {
+				// 思考块结束，转入正式文本
+				partial.Content = append(partial.Content, &ThinkingContent{Thinking: thinkingBuf})
+				s.Push(Event{Type: EventThinkingEnd, Partial: partial})
+				thinkingOpen = false
+			}
 			if !textOpen {
 				s.Push(Event{Type: EventTextStart, Partial: partial})
 				textOpen = true
@@ -288,6 +307,10 @@ func consumeOAISSE(r io.Reader, model Model, s *EventStream) error {
 		return err
 	}
 
+	if thinkingOpen {
+		partial.Content = append(partial.Content, &ThinkingContent{Thinking: thinkingBuf})
+		s.Push(Event{Type: EventThinkingEnd, Partial: partial})
+	}
 	if textOpen {
 		partial.Content = append(partial.Content, &TextContent{Text: textBuf})
 		s.Push(Event{Type: EventTextEnd, Partial: partial})
