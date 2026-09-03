@@ -19,6 +19,9 @@ import (
 	"goagent/pkg/tools"
 )
 
+// version 由 Makefile 的 -ldflags "-X main.version=..." 注入。
+var version = "dev"
+
 const systemPrompt = `You are an AI coding agent. You help users with software engineering tasks using the available tools.
 
 Guidelines:
@@ -36,8 +39,14 @@ func main() {
 		sessionDir  = flag.String("session-dir", defaultSessionDir(), "directory for session files")
 		noSession   = flag.Bool("no-session", false, "disable session persistence")
 		contextSize = flag.Int("context", 128000, "context window size for auto-compaction (0 = off)")
+		showVersion = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("goagent", version)
+		return
+	}
 
 	registry, model, err := setupProvider(*providerID, *modelID, *baseURL, *contextSize)
 	if err != nil {
@@ -67,6 +76,10 @@ func main() {
 	if *contextSize > 0 {
 		h.AutoCompactWindow = *contextSize
 	}
+
+	// 加载技能（对应 pi 的 skills 资源）：全局 ~/.goagent/skills + 项目 ./agents/skills
+	cwd, _ := os.Getwd()
+	h.ApplySkills(filepath.Join(filepath.Dir(*sessionDir), "skills"), filepath.Join(cwd, "agents", "skills"))
 
 	// Ctrl+C 中止当前 run（对应 pi 的 abort）
 	sigCh := make(chan os.Signal, 1)
@@ -172,7 +185,7 @@ func printSubscriber(ev agent.Event) {
 // ---- interactive 模式（行式 REPL）----
 
 func runInteractive(h *harness.Harness) {
-	fmt.Println("goagent interactive. Commands: /branch <id> /tree /compact /resume /quit; !cmd runs bash directly.")
+	fmt.Println("goagent interactive. Commands: /skills /branch <id> /tree /compact /resume /quit; !cmd runs bash directly.")
 	if h.Session != nil {
 		fmt.Println("session:", h.Session.Path())
 	}
@@ -197,6 +210,8 @@ func runInteractive(h *harness.Harness) {
 			return
 		case line == "/tree":
 			printTree(h)
+		case line == "/skills":
+			printSkills(h)
 		case line == "/compact":
 			fmt.Println("compacting...")
 			summary, err := h.Compact(context.Background())
@@ -242,6 +257,16 @@ func printTree(h *harness.Harness) {
 			mark = "* "
 		}
 		fmt.Printf("%s%s %s (parent=%s)\n", mark, e.ID, e.Type, e.ParentID)
+	}
+}
+
+func printSkills(h *harness.Harness) {
+	if len(h.Skills) == 0 {
+		fmt.Println("(no skills loaded)")
+		return
+	}
+	for _, s := range h.Skills {
+		fmt.Printf("%s [%s] %s\n  %s\n", s.Name, s.Source, s.Description, s.Dir)
 	}
 }
 

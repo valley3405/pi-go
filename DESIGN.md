@@ -24,7 +24,7 @@ pi 的核心思想：**分层解耦 + 事件驱动 + 最小内核**。goagent �
 ┌──────────────────────────────────────────────────┐
 │ cmd/goagent        CLI（interactive / print）      │
 ├──────────────────────────────────────────────────┤
-│ pkg/harness        会话树（JSONL）、分支、压缩      │
+│ pkg/harness        会话树（JSONL）、分支、压缩、skills │
 ├──────────────────────────────────────────────────┤
 │ pkg/agent          Agent 状态机 + agent loop       │
 │  ├─ Agent            状态、事件订阅、双队列         │
@@ -174,6 +174,12 @@ type AgentTool interface {
 ### 5.3 Harness 组装
 
 `Harness` 持有 `*agent.Agent` + `*Session`：订阅 agent 事件自动落盘；提供 `Prompt / Branch / Compact / Resume`；崩溃恢复 = 重新读 JSONL 重放到 leaf。
+
+### 5.4 Skills（对应 pi 的 skills 资源）
+
+- **发现**：`LoadSkills(root, source)` 扫描 root 下含 `SKILL.md` 的目录（任意深度），解析 frontmatter（`name`/`description`，长度上限 64/1024，与 pi 一致）；尊重扫描根的 `.gitignore`/`.ignore`（简化语义：否定、目录限定、锚定、glob），点开头目录默认跳过；解析失败的技能静默跳过。
+- **合并**：`MergeSkills` 按来源合并，后者覆盖同名前者（project > global）。
+- **注入**：`Harness.ApplySkills(globalDir, projectDir)` 把技能清单渲染为系统提示词段落（`FormatForSystemPrompt`）；模型按需用 `read` 工具读 SKILL.md 全文——与 pi 的按需加载路径一致。
 
 ## 6. pkg/tools —— 内置编码工具
 

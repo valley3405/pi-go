@@ -11,7 +11,8 @@ pkg/llm       统一多供应商 LLM 层：消息模型、流式事件流、Prov
               （OpenAI 兼容 / Anthropic / 测试用 FauxProvider）
 pkg/agent     Agent 运行时：双层循环、steering/follow-up 双队列、
               生命周期事件、工具三段管线（prepare/execute/finalize）
-pkg/harness   append-only JSONL 树状会话、分支、上下文压缩
+pkg/harness   append-only JSONL 树状会话、分支、上下文压缩、
+              skills 发现与注入（SKILL.md + frontmatter，gitignore 感知）
 pkg/tools     内置编码工具：bash / read / write / edit / ls / grep
 cmd/goagent   CLI：interactive REPL 与 print 模式
 examples/     无 API key 的端到端演示（FauxProvider）
@@ -42,8 +43,25 @@ go run ./cmd/goagent -model deepseek-chat -p "..."
 
 # 交互模式（无参数启动）
 go run ./cmd/goagent
-# 命令：/branch <id>  /tree  /compact  /resume  /quit ；!cmd 直接跑 bash
+# 命令：/skills  /branch <id>  /tree  /compact  /resume  /quit ；!cmd 直接跑 bash
 ```
+
+## Skills
+
+在 `~/.goagent/skills/<name>/SKILL.md`（全局）或当前项目 `./agents/skills/<name>/SKILL.md`（项目级）放一个带 frontmatter 的文件即可注册技能：
+
+```markdown
+---
+name: commit
+description: Write good commit messages following conventional commits
+---
+
+# Commit
+
+（技能正文：流程、规范、示例……）
+```
+
+启动时自动发现（尊重 `.gitignore`/`.ignore`，同名时项目目录覆盖全局），清单注入系统提示词；模型按需用 `read` 工具加载 SKILL.md 全文。交互模式用 `/skills` 查看已加载技能。
 
 ## 作为库嵌入
 
@@ -82,6 +100,7 @@ a.WaitForIdle()
 | before/afterToolCall 钩子 | `Agent.BeforeToolCall` / `AfterToolCall` |
 | `SessionManager`（树状 JSONL） | `harness.Session` |
 | `branch()` / compaction | `Session.Branch()` / `harness.Compact()` |
+| skills 资源发现与注入 | `harness.LoadSkills()` / `Harness.ApplySkills()` |
 | faux provider（测试） | `llm.FauxProvider` |
 
 ## 路线图

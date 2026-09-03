@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"time"
@@ -52,15 +53,33 @@ func (t *bashTool) Execute(ctx context.Context, callID string, args json.RawMess
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", p.Command)
+
+	// 防卡住三件套（修复"管道残留进程拖住 stdout 导致 Wait 不返回"）：
+	// 1. Setpgid：子进程独立成组，后台/管道孙进程都在组内；
+	// 2. Cancel：超时时整组 SIGKILL，而不是只杀 bash 本体；
+	// 3. WaitDelay：命令退出后若仍有残留进程占着管道，最多再等 5s
+	//    就强制关闭管道，Wait 保证返回（输出可能不完整，标注错误）。
+	setProcGroup(cmd)
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return killProcessGroup(cmd.Process.Pid)
+	}
+	cmd.WaitDelay = 5 * time.Second
+
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	err := cmd.Run()
 
 	out := truncateOutput(buf.String(), 100*1024)
-	if ctx.Err() == context.DeadlineExceeded {
-		out += fmt.Sprintf("\n(command timed out after %ds)", p.Timeout)
-	} else if err != nil {
+	switch {
+	case ctx.Err() == context.DeadlineExceeded:
+		out += fmt.Sprintf("\n(command timed out after %ds, process group killed)", p.Timeout)
+	case errors.Is(err, exec.ErrWaitDelay):
+		out += "\n(command exited but leftover background processes held the pipes; output may be incomplete)"
+	case err != nil:
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			out += fmt.Sprintf("\n(exit code %d)", exitErr.ExitCode())
 		} else {

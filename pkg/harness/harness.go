@@ -16,6 +16,8 @@ type Harness struct {
 
 	streamFn   llm.StreamFn
 	streamOpts llm.StreamOptions
+	// Skills 是 ApplySkills 加载到的技能清单。
+	Skills []Skill
 	// AutoCompactWindow 大于 0 时，prompt 前按该窗口自动判断是否压缩。
 	AutoCompactWindow int
 	KeepRecent        int // compaction 时保留的最近消息数
@@ -39,6 +41,21 @@ func New(a *agent.Agent, s *Session, streamFn llm.StreamFn, opts llm.StreamOptio
 		})
 	}
 	return h
+}
+
+// ApplySkills 把技能清单注入 agent 的系统提示词（对应 pi 的 skills 资源注入）。
+// 模型看到清单后，用 read 工具读取对应 SKILL.md 按需加载全文。
+// project 来源的技能覆盖 global 同名技能。
+func (h *Harness) ApplySkills(globalDir, projectDir string) {
+	global, _ := LoadSkills(globalDir, "global")
+	project, _ := LoadSkills(projectDir, "project")
+	skills := MergeSkills(global, project)
+	h.Skills = skills
+	if len(skills) == 0 {
+		return
+	}
+	snap := h.Agent.Snapshot()
+	h.Agent.SetSystemPrompt(snap.SystemPrompt + FormatForSystemPrompt(skills))
 }
 
 // Prompt 提交新 prompt。开启 AutoCompactWindow 时先做自动压缩。
