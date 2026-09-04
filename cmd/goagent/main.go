@@ -77,9 +77,10 @@ func main() {
 		h.AutoCompactWindow = *contextSize
 	}
 
-	// 加载技能（对应 pi 的 skills 资源）：全局 ~/.goagent/skills + 项目 ./agents/skills
+	// 加载技能（对应 pi 的 skills 资源）：全局 ~/.goagent/skills + 项目 ./.agents/skills
+	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
-	h.ApplySkills(filepath.Join(filepath.Dir(*sessionDir), "skills"), filepath.Join(cwd, "agents", "skills"))
+	h.ApplySkills(filepath.Join(home, ".goagent", "skills"), filepath.Join(cwd, ".agents", "skills"))
 
 	// Ctrl+C 中止当前 run（对应 pi 的 abort）
 	sigCh := make(chan os.Signal, 1)
