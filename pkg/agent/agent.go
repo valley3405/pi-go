@@ -66,7 +66,8 @@ type State struct {
 type Agent struct {
 	mu         sync.Mutex
 	state      State
-	listeners  []func(Event)
+	listeners  []listener
+	nextLid    uint64
 	tools      []AgentTool
 	streamFn   llm.StreamFn
 	streamOpts llm.StreamOptions
@@ -132,17 +133,25 @@ func closedCh() chan struct{} {
 	return c
 }
 
+// listener 是带唯一 ID 的事件监听器（Go 函数值不可比较，用 ID 做删除标识）。
+type listener struct {
+	id uint64
+	fn func(Event)
+}
+
 // Subscribe 注册事件监听器，返回取消函数。
 // 监听器按注册顺序同步调用（对应 pi 的 await-in-order）。
 func (a *Agent) Subscribe(fn func(Event)) (unsubscribe func()) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.listeners = append(a.listeners, fn)
+	a.nextLid++
+	id := a.nextLid
+	a.listeners = append(a.listeners, listener{id: id, fn: fn})
 	return func() {
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		for i, l := range a.listeners {
-			if &l == &fn {
+			if l.id == id {
 				a.listeners = append(a.listeners[:i], a.listeners[i+1:]...)
 				return
 			}
@@ -373,7 +382,10 @@ func (a *Agent) emit(ev Event) error {
 	case EventAgentEnd:
 		a.state.StreamingMessage = nil
 	}
-	listeners := append([]func(Event){}, a.listeners...)
+	listeners := make([]func(Event), 0, len(a.listeners))
+	for _, l := range a.listeners {
+		listeners = append(listeners, l.fn)
+	}
 	a.mu.Unlock()
 
 	for _, l := range listeners {
