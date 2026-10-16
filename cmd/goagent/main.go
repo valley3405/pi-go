@@ -1,5 +1,5 @@
 // goagent CLI（对应 pi 的 coding-agent 精简版）：
-// interactive（行式 REPL）与 print（-p）两种模式。
+// TUI、行式 REPL（-repl）与 print（-p）三种模式。
 package main
 
 import (
@@ -17,6 +17,7 @@ import (
 	"goagent/pkg/harness"
 	"goagent/pkg/llm"
 	"goagent/pkg/tools"
+	"goagent/pkg/tui"
 )
 
 // version 由 Makefile 的 -ldflags "-X main.version=..." 注入。
@@ -39,6 +40,7 @@ func main() {
 		sessionDir  = flag.String("session-dir", defaultSessionDir(), "directory for session files")
 		noSession   = flag.Bool("no-session", false, "disable session persistence")
 		contextSize = flag.Int("context", 128000, "context window size for auto-compaction (0 = off)")
+		repl        = flag.Bool("repl", false, "use the line-oriented REPL instead of the TUI")
 		showVersion = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
@@ -96,7 +98,14 @@ func main() {
 	if *prompt != "" {
 		os.Exit(runPrint(h, *prompt))
 	}
-	runInteractive(h)
+	if *repl {
+		runInteractive(h)
+		return
+	}
+	if err := tui.Run(h); err != nil {
+		fmt.Fprintln(os.Stderr, "error: run tui:", err)
+		os.Exit(1)
+	}
 }
 
 func envOr(key, def string) string {

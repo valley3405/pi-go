@@ -13,6 +13,12 @@ import (
 	"goagent/pkg/llm"
 )
 
+// BashResultDetails 描述进程退出状态，不改变返回给模型的文本内容。
+type BashResultDetails struct {
+	ExitCode int  `json:"exitCode"`
+	Success  bool `json:"success"`
+}
+
 // Bash 执行 shell 命令（对应 pi 的 bash 工具）：超时 + 输出截断。
 func Bash() agent.AgentTool {
 	return &bashTool{baseTool{
@@ -89,5 +95,17 @@ func (t *bashTool) Execute(ctx context.Context, callID string, args json.RawMess
 	if out == "" {
 		out = "(no output)"
 	}
-	return textResult(out), nil
+	success := err == nil || errors.Is(err, exec.ErrWaitDelay)
+	if ctx.Err() != nil {
+		success = false
+	}
+	exitCode := -1
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	} else if success {
+		exitCode = 0
+	}
+	result := textResult(out)
+	result.Details = BashResultDetails{ExitCode: exitCode, Success: success}
+	return result, nil
 }

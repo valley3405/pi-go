@@ -1,0 +1,262 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+var (
+	headerStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.AdaptiveColor{Light: "236", Dark: "252"}).
+			Background(lipgloss.AdaptiveColor{Light: "254", Dark: "237"})
+	userLabelStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.AdaptiveColor{Light: "25", Dark: "39"})
+	agentLabelStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.AdaptiveColor{Light: "88", Dark: "212"})
+	toolLabelStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.AdaptiveColor{Light: "22", Dark: "114"})
+	systemLabelStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.AdaptiveColor{Light: "242", Dark: "245"})
+	thinkingStyle = lipgloss.NewStyle().
+			Italic(true).
+			Foreground(lipgloss.AdaptiveColor{Light: "240", Dark: "244"})
+	mutedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "242", Dark: "245"})
+	errorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"})
+	toolOutputStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "238", Dark: "250"})
+)
+
+// View renders the complete terminal interface.
+func (m Model) View() string {
+	parts := make([]string, 0, 5)
+	if m.height >= 3 {
+		parts = append(parts, m.headerView())
+	}
+	if m.viewport.Height > 0 {
+		parts = append(parts, m.viewport.View())
+	}
+	parts = append(parts, m.input.View())
+	if m.height >= 4 {
+		parts = append(parts, m.statusView())
+	}
+	if m.height >= 5 {
+		parts = append(parts, m.helpView())
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+func (m Model) headerView() string {
+	model := m.harness.Agent.Snapshot().Model
+	name := model.ID
+	if name == "" {
+		name = "unknown"
+	}
+	if model.Provider != "" {
+		name = model.Provider + "/" + name
+	}
+	return headerStyle.MaxWidth(m.width).Render(" goagent · " + name)
+}
+
+func (m Model) statusView() string {
+	status := "ready"
+	switch {
+	case m.notice != "":
+		status = m.notice
+	case m.busy && m.activity != "":
+		status = "● " + m.activity
+	case m.busy:
+		status = "● working"
+	}
+	if !m.busy && m.notice == "" {
+		if m.harness.Session != nil {
+			status += " · session " + m.harness.Session.ID()
+		} else {
+			status += " · no session"
+		}
+	}
+	style := mutedStyle
+	if m.notice != "" && !m.busy {
+		style = errorStyle
+	}
+	return style.MaxWidth(m.width).Render(status)
+}
+
+func (m Model) helpView() string {
+	help := "Enter 发送 · Alt+Enter 换行 · PgUp/PgDn 滚动 · Esc 中止 · Ctrl+C 中止/退出"
+	return mutedStyle.MaxWidth(m.width).Render(help)
+}
+
+func (m *Model) resize(width, height int) {
+	m.width = max(1, width)
+	m.height = max(1, height)
+	if m.width < 3 {
+		m.input.Prompt = ""
+	} else {
+		m.input.Prompt = "❯ "
+	}
+	m.input.SetWidth(m.width)
+
+	chrome := 0
+	if m.height >= 3 {
+		chrome++
+	}
+	if m.height >= 4 {
+		chrome++
+	}
+	if m.height >= 5 {
+		chrome++
+	}
+	available := max(1, m.height-chrome)
+	maxInputHeight := available
+	if available >= 2 {
+		maxInputHeight--
+	}
+	m.input.SetHeight(clamp(m.input.LineCount(), 1, min(maxInputRows, max(1, maxInputHeight))))
+	m.viewport.Width = m.width
+	m.viewport.Height = max(0, available-m.input.Height())
+}
+
+func (m *Model) refreshTranscript(follow bool) {
+	m.viewport.SetContent(m.renderTranscript(m.viewport.Width))
+	if follow {
+		m.viewport.GotoBottom()
+	}
+}
+
+func (m Model) renderTranscript(width int) string {
+	if len(m.entries) == 0 {
+		welcome := "开始一段 coding session。\n\n输入消息与 agent 对话，输入 /help 查看会话命令。\n历史记录可用 PgUp/PgDn 或鼠标滚轮浏览。"
+		return mutedStyle.Width(max(1, width)).Render(welcome)
+	}
+	var b strings.Builder
+	for i, entry := range m.entries {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(renderEntry(entry, width))
+	}
+	return b.String()
+}
+
+func renderEntry(entry transcriptEntry, width int) string {
+	width = max(1, width)
+	switch entry.kind {
+	case entryUser:
+		return renderMessage(userLabelStyle.Render("You"), entry.text, nil, width)
+	case entryAssistant:
+		body := entry.text
+		if entry.failed {
+			terminal := "agent run ended: " + string(entry.stopReason)
+			if body == "" {
+				body = terminal
+			} else {
+				body += "\n\n" + terminal
+			}
+		}
+		if body == "" {
+			body = "…"
+		}
+		var bodyStyle *lipgloss.Style
+		if entry.failed {
+			bodyStyle = &errorStyle
+		}
+		var prefix string
+		if entry.thinking != "" {
+			prefix = thinkingStyle.Render("Thinking\n"+entry.thinking) + "\n\n"
+		}
+		return renderMessage(agentLabelStyle.Render("Agent"), prefix+body, bodyStyle, width)
+	case entryTool:
+		status := "[ok]"
+		labelStyle := toolLabelStyle
+		if entry.running {
+			status = "[running]"
+		} else if entry.failed {
+			status = "[error]"
+			labelStyle = errorStyle
+		}
+		label := labelStyle.Render(fmt.Sprintf("%s %s", entry.name, status))
+		if entry.callID != "" {
+			label += mutedStyle.Render(" · " + entry.callID)
+		}
+		var b strings.Builder
+		b.WriteString(label)
+		if entry.args != "" {
+			b.WriteByte('\n')
+			b.WriteString(mutedStyle.Render("args: " + singleLine(entry.args, 240)))
+		}
+		if entry.output != "" {
+			b.WriteByte('\n')
+			b.WriteString(toolOutputStyle.Width(width).MaxWidth(width).Render(outputPreview(entry.output)))
+		}
+		return b.String()
+	case entrySystem:
+		style := mutedStyle
+		if entry.failed {
+			style = errorStyle
+		}
+		return renderMessage(style.Render("System"), entry.text, &style, width)
+	default:
+		return ""
+	}
+}
+
+func renderMessage(label, body string, style *lipgloss.Style, width int) string {
+	bodyStyle := lipgloss.NewStyle()
+	if style != nil {
+		bodyStyle = *style
+	}
+	return label + "\n" + bodyStyle.Width(width).MaxWidth(width).Render(body)
+}
+
+func singleLine(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	return truncateRunes(text, limit)
+}
+
+func outputPreview(text string) string {
+	const (
+		maxLines = 24
+		maxRunes = 6000
+	)
+	lines := strings.Split(text, "\n")
+	if len(lines) > maxLines {
+		head := maxLines * 2 / 3
+		tail := maxLines - head
+		omitted := len(lines) - head - tail
+		lines = append(lines[:head], append([]string{fmt.Sprintf("… 省略 %d 行 …", omitted)}, lines[len(lines)-tail:]...)...)
+	}
+	text = strings.Join(lines, "\n")
+	runes := []rune(text)
+	if len(runes) > maxRunes {
+		head := maxRunes * 2 / 3
+		tail := maxRunes - head
+		text = string(runes[:head]) + "\n… 输出已截断 …\n" + string(runes[len(runes)-tail:])
+	}
+	return text
+}
+
+func truncateRunes(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	if limit == 1 {
+		return "…"
+	}
+	return string(runes[:limit-1]) + "…"
+}
+
+func clamp(value, low, high int) int {
+	return min(high, max(low, value))
+}

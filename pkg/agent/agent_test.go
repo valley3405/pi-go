@@ -347,3 +347,62 @@ func TestConcurrentDoubleRun(t *testing.T) {
 	}
 	fmt.Println("ok")
 }
+
+func TestBrokenStreamEmitsFinalMessage(t *testing.T) {
+	a := agent.New(agent.Options{
+		Model: llm.Model{ID: "broken", Provider: "broken"},
+		StreamFn: func(ctx context.Context, model llm.Model, llmCtx llm.Context, opts llm.StreamOptions) *llm.EventStream {
+			stream := llm.NewEventStream()
+			partial := llm.Message{Role: llm.RoleAssistant, Content: []llm.Content{&llm.TextContent{Text: "partial"}}}
+			stream.Push(llm.Event{Type: llm.EventStart, Partial: partial})
+			stream.Finish(partial, fmt.Errorf("boom"))
+			return stream
+		},
+	})
+	var messageEnds, agentEnds int
+	a.Subscribe(func(event agent.Event) {
+		if event.Type == agent.EventMessageEnd && event.Message.Role == llm.RoleAssistant {
+			messageEnds++
+		}
+		if event.Type == agent.EventAgentEnd {
+			agentEnds++
+		}
+	})
+	if err := a.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	a.WaitForIdle()
+	if messageEnds != 1 || agentEnds != 1 {
+		t.Fatalf("terminal events: message_end=%d agent_end=%d", messageEnds, agentEnds)
+	}
+	messages := a.Messages()
+	if len(messages) != 2 || messages[1].StopReason != llm.StopError {
+		t.Fatalf("broken stream final message missing: %#v", messages)
+	}
+}
+
+func TestCanceledHookEmitsAgentEnd(t *testing.T) {
+	a, _ := newFauxAgent(nil)
+	a.TransformContext = func(ctx context.Context, messages []agent.AgentMessage) ([]agent.AgentMessage, error) {
+		return nil, ctx.Err()
+	}
+	var agentEnds int
+	a.Subscribe(func(event agent.Event) {
+		if event.Type == agent.EventAgentEnd {
+			agentEnds++
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := a.Prompt(ctx, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	a.WaitForIdle()
+	if agentEnds != 1 {
+		t.Fatalf("got %d agent_end events, want 1", agentEnds)
+	}
+	messages := a.Messages()
+	if len(messages) != 2 || messages[1].StopReason != llm.StopAborted {
+		t.Fatalf("canceled run final message missing: %#v", messages)
+	}
+}

@@ -13,16 +13,18 @@ pi 的核心思想：**分层解耦 + 事件驱动 + 最小内核**。goagent �
 | `agent/harness` + `session-manager` | `pkg/harness` | 会话持久化（append-only JSONL、树状分支）、上下文压缩（compaction） |
 | `coding-agent/core/tools` | `pkg/tools` | 内置工具：bash / read / write / edit / ls / grep |
 | 扩展系统（TS 模块） | 钩子接口 + 工具注册（Go interface） | Go 没有动态加载 TS 的能力，改用编译期接口注入 |
-| `pi-tui` | 简易行式 REPL（stdlib `bufio`） | 保持零外部依赖；TUI 留作后续路线 |
+| `pi-tui` | `pkg/tui` + `cmd/goagent` | Bubble Tea 全屏 TUI；保留 stdlib 行式 REPL 作为回退 |
 | RPC / server / client | 路线图 | 暂不进内核 |
 
-关键约束：**只用 Go 标准库**（`net/http` + SSE 手工解析、`encoding/json`、`os/exec`），保证 `go build` 零依赖、可离线复现。
+关键约束：核心 LLM、agent、harness 与工具层只用 Go 标准库（`net/http` + SSE 手工解析、`encoding/json`、`os/exec`）；TUI 使用 Bubble Tea/Bubbles/Lip Gloss，并固定兼容 Go 1.23 的 v1 版本。
 
 ## 2. 分层结构
 
 ```
 ┌──────────────────────────────────────────────────┐
-│ cmd/goagent        CLI（interactive / print）      │
+│ cmd/goagent        CLI（TUI / REPL / print）        │
+├──────────────────────────────────────────────────┤
+│ pkg/tui            Bubble Tea 模型、事件桥接与全屏布局 │
 ├──────────────────────────────────────────────────┤
 │ pkg/harness        会话树（JSONL）、分支、压缩、skills │
 ├──────────────────────────────────────────────────┤
@@ -40,7 +42,7 @@ pi 的核心思想：**分层解耦 + 事件驱动 + 最小内核**。goagent �
 └──────────────────────────────────────────────────┘
 ```
 
-依赖方向严格自上而下：`agent` 不认识具体 provider（只认 `llm.StreamFn`），`harness` 不认识 CLI，`llm` 不认识 agent。
+依赖方向严格自上而下：`agent` 不认识具体 provider（只认 `llm.StreamFn`），`harness` 不认识 CLI/TUI，`tui` 只通过 harness/agent 公开接口工作，`llm` 不认识 agent。
 
 ## 3. pkg/llm —— 统一 LLM 层（≈ pi-ai）
 
@@ -194,18 +196,19 @@ type AgentTool interface {
 | `ls` | 列目录 | `os.ReadDir` |
 | `grep` | 正则搜索文件内容 | `regexp` + `filepath.WalkDir` + .gitignore 简化支持 |
 
-## 7. cmd/goagent —— CLI
+## 7. pkg/tui + cmd/goagent —— 终端客户端
 
+- **TUI 模式（默认）**：Bubble Tea 全屏应用，Bubbles viewport/textarea 分别负责历史滚动与多行输入，Lip Gloss 负责样式和自适应布局。`Agent.Subscribe` 的生命周期事件通过 `Program.Send` 转入 UI 更新循环，assistant 流式内容与并行工具状态按事件归并。
+- **异步操作**：prompt、compaction 和用户 bash 都作为 `tea.Cmd` 执行；Esc/Ctrl+C 通过 context 与 `Agent.Abort()` 中止。Enter 发送，Alt+Enter 等组合键换行，PgUp/PgDn/鼠标滚轮浏览历史。
+- **REPL 回退**：`goagent -repl` 保留原 stdlib `bufio` 行式界面，适合不需要全屏控制的环境。
 - **print 模式**：`goagent -p "prompt"`，流式输出文本，工具调用打印摘要，退出码反映 stopReason。
-- **interactive 模式**：行式 REPL（`bufio.Reader`），命令：
-  - `/model`、`/branch <id>`、`/compact`、`/tree`、`/quit`
-  - `!cmd` 直接把 bash 输出注入上下文（对应 pi 的 user_bash）
+- 会话命令：`/help`、`/skills`、`/branch <id>`、`/compact`、`/tree`、`/resume`、`/quit`；`!cmd` 执行 bash 并在当前界面显示输出，不注入模型上下文。
 - 配置：环境变量 `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`GOAGENT_MODEL`、`ANTHROPIC_API_KEY`；会话文件默认 `~/.goagent/sessions/`。
 
 ## 8. 与 pi 的差异（刻意决策）
 
 1. **无动态扩展加载**：pi 的 TS 扩展系统在 Go 里用「钩子字段 + 工具注册接口」替代，能力面一致（事件订阅、before/after tool、注册工具/命令），牺牲运行时热插拔。
-2. **无内置 TUI 框架**：pi-tui 是上千行的差分渲染框架，goagent 一期只做行式 REPL。
+2. **使用现成 TUI 框架**：pi-tui 是自研差分渲染框架，goagent 使用 Charm 生态的 Bubble Tea/Bubbles/Lip Gloss，核心 agent/harness 不依赖这些 UI 包。
 3. **无权限系统**：与 pi 一致，不做 sandbox，建议容器化运行。
 4. **无 RPC/server**：留作路线图（pi 的这一层本身也标注 experimental）。
 

@@ -1,0 +1,421 @@
+package tui
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"goagent/pkg/agent"
+	"goagent/pkg/harness"
+	"goagent/pkg/llm"
+	"goagent/pkg/tools"
+)
+
+func newTestHarness(t *testing.T, script []llm.Message, withSession bool, toolList ...agent.AgentTool) *harness.Harness {
+	t.Helper()
+	faux := llm.NewFauxProvider("faux", script, 3)
+	registry := llm.NewRegistry()
+	registry.SetProvider(faux)
+	model, err := registry.GetModel("faux", "faux-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := agent.New(agent.Options{
+		SystemPrompt: "test",
+		Model:        model,
+		Tools:        toolList,
+		StreamFn:     registry.StreamSimple,
+	})
+	var session *harness.Session
+	if withSession {
+		session, err = harness.CreateSession(t.TempDir(), t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = session.Close() })
+	}
+	return harness.New(a, session, registry.StreamSimple, llm.StreamOptions{})
+}
+
+func updateModel(t *testing.T, m Model, msg tea.Msg) (Model, tea.Cmd) {
+	t.Helper()
+	updated, cmd := m.Update(msg)
+	model, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("unexpected model type %T", updated)
+	}
+	return model, cmd
+}
+
+func submitText(t *testing.T, m Model, text string) (Model, tea.Cmd) {
+	t.Helper()
+	m.input.SetValue(text)
+	return updateModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+}
+
+func applyAgentEvent(t *testing.T, m Model, event agent.Event) Model {
+	t.Helper()
+	updated, cmd := updateModel(t, m, agentEventMsg{event: event})
+	if cmd != nil {
+		t.Fatal("agent event returned an unexpected command")
+	}
+	return updated
+}
+
+func runPromptAndDrain(t *testing.T, m Model, h *harness.Harness, events <-chan agent.Event, cmd tea.Cmd) Model {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("prompt did not return a command")
+	}
+	updated, next := updateModel(t, m, cmd())
+	if next != nil {
+		t.Fatal("prompt completion returned an unexpected follow-up command")
+	}
+	return drainAgent(t, updated, h, events)
+}
+
+func drainAgent(t *testing.T, m Model, h *harness.Harness, events <-chan agent.Event) Model {
+	t.Helper()
+	idle := make(chan struct{})
+	go func() {
+		h.Agent.WaitForIdle()
+		close(idle)
+	}()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case event := <-events:
+			m = applyAgentEvent(t, m, event)
+		case <-idle:
+			for {
+				select {
+				case event := <-events:
+					m = applyAgentEvent(t, m, event)
+				default:
+					return m
+				}
+			}
+		case <-timer.C:
+			t.Fatal("timed out waiting for agent")
+		}
+	}
+}
+
+func TestPromptStreamsToolsAndRenders(t *testing.T) {
+	h := newTestHarness(t, []llm.Message{
+		llm.FauxToolCall("working", &llm.ToolCallContent{
+			ID: "call-1", Name: "bash", Arguments: json.RawMessage(`{"command":"printf tool-output"}`),
+		}),
+		llm.FauxAssistant("done"),
+	}, true, tools.Bash())
+	m := New(h)
+	events := make(chan agent.Event, 1024)
+	unsubscribe := h.Agent.Subscribe(func(event agent.Event) { events <- event })
+	t.Cleanup(unsubscribe)
+
+	m, cmd := submitText(t, m, "run the tool")
+	if !m.busy {
+		t.Fatal("submit should mark the model busy")
+	}
+	m = runPromptAndDrain(t, m, h, events, cmd)
+
+	if m.busy {
+		t.Fatal("agent completion should clear busy state")
+	}
+	if len(m.entries) != 4 {
+		t.Fatalf("got %d transcript entries, want 4: %#v", len(m.entries), m.entries)
+	}
+	if m.entries[0].kind != entryUser || m.entries[0].text != "run the tool" {
+		t.Fatalf("unexpected user entry: %#v", m.entries[0])
+	}
+	if m.entries[1].kind != entryAssistant || m.entries[1].text != "working" {
+		t.Fatalf("unexpected first assistant entry: %#v", m.entries[1])
+	}
+	toolEntry := m.entries[2]
+	if toolEntry.kind != entryTool || toolEntry.callID != "call-1" || toolEntry.output != "tool-output" || toolEntry.running || toolEntry.failed {
+		t.Fatalf("unexpected tool entry: %#v", toolEntry)
+	}
+	if m.entries[3].text != "done" {
+		t.Fatalf("unexpected final assistant entry: %#v", m.entries[3])
+	}
+	view := m.View()
+	for _, want := range []string{"run the tool", "working", "bash", "tool-output", "done"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view does not contain %q:\n%s", want, view)
+		}
+	}
+	if got := len(h.Agent.Messages()); got != 4 {
+		t.Fatalf("agent has %d messages, want 4", got)
+	}
+}
+
+func TestBrokenStreamIsVisible(t *testing.T) {
+	a := agent.New(agent.Options{
+		Model: llm.Model{ID: "broken", Provider: "broken"},
+		StreamFn: func(ctx context.Context, model llm.Model, llmCtx llm.Context, opts llm.StreamOptions) *llm.EventStream {
+			stream := llm.NewEventStream()
+			partial := llm.Message{Role: llm.RoleAssistant, Content: []llm.Content{&llm.TextContent{Text: "partial"}}}
+			stream.Push(llm.Event{Type: llm.EventStart, Partial: partial})
+			stream.Finish(partial, errors.New("provider failed"))
+			return stream
+		},
+	})
+	h := harness.New(a, nil, nil, llm.StreamOptions{})
+	m := New(h)
+	events := make(chan agent.Event, 128)
+	unsubscribe := h.Agent.Subscribe(func(event agent.Event) { events <- event })
+	t.Cleanup(unsubscribe)
+
+	m, cmd := submitText(t, m, "hi")
+	m = runPromptAndDrain(t, m, h, events, cmd)
+	if m.busy {
+		t.Fatal("broken stream left model busy")
+	}
+	last := m.entries[len(m.entries)-1]
+	if last.kind != entryAssistant || !last.failed || last.stopReason != llm.StopError {
+		t.Fatalf("broken stream final entry: %#v", last)
+	}
+	if view := m.View(); !strings.Contains(view, "partial") || !strings.Contains(view, "agent run ended: error") {
+		t.Fatalf("broken stream error not visible:\n%s", view)
+	}
+}
+
+func TestCanceledHookClearsBusy(t *testing.T) {
+	h := newTestHarness(t, nil, false)
+	h.Agent.TransformContext = func(ctx context.Context, messages []agent.AgentMessage) ([]agent.AgentMessage, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	m := New(h)
+	events := make(chan agent.Event, 128)
+	unsubscribe := h.Agent.Subscribe(func(event agent.Event) { events <- event })
+	t.Cleanup(unsubscribe)
+
+	m, cmd := submitText(t, m, "cancel me")
+	updated, next := updateModel(t, m, cmd())
+	if next != nil {
+		t.Fatal("prompt completion returned an unexpected command")
+	}
+	m, _ = updateModel(t, updated, tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = drainAgent(t, m, h, events)
+	if m.busy {
+		t.Fatal("canceled hook left model busy")
+	}
+	last := m.entries[len(m.entries)-1]
+	if last.stopReason != llm.StopAborted {
+		t.Fatalf("canceled hook final entry: %#v", last)
+	}
+}
+
+func TestParallelToolEventsUseCallID(t *testing.T) {
+	m := New(newTestHarness(t, nil, false))
+	m.applyAgentEvent(agent.Event{Type: agent.EventToolExecutionStart, ToolCallID: "c1", ToolName: "read", Args: json.RawMessage(`{"path":"a"}`)})
+	m.applyAgentEvent(agent.Event{Type: agent.EventToolExecutionStart, ToolCallID: "c2", ToolName: "read", Args: json.RawMessage(`{"path":"b"}`)})
+	m.applyAgentEvent(agent.Event{Type: agent.EventToolExecutionUpdate, ToolCallID: "c2", ToolName: "read", PartialResult: &agent.ToolResult{
+		Content: []llm.Content{&llm.TextContent{Text: "partial-b"}},
+	}})
+	m.applyAgentEvent(agent.Event{Type: agent.EventToolExecutionEnd, ToolCallID: "c1", ToolName: "read", IsError: true, Result: &agent.ToolResult{
+		Content: []llm.Content{&llm.TextContent{Text: "final-a"}},
+	}})
+
+	if len(m.entries) != 2 {
+		t.Fatalf("got %d entries, want 2", len(m.entries))
+	}
+	if m.entries[0].callID != "c1" || m.entries[0].output != "final-a" || !m.entries[0].failed || m.entries[0].running {
+		t.Errorf("wrong c1 entry: %#v", m.entries[0])
+	}
+	if m.entries[1].callID != "c2" || m.entries[1].output != "partial-b" || m.entries[1].failed || !m.entries[1].running {
+		t.Errorf("wrong c2 entry: %#v", m.entries[1])
+	}
+}
+
+func TestMultilineInputAndAbort(t *testing.T) {
+	m := New(newTestHarness(t, nil, false))
+	m.input.SetValue("first")
+	updated, _ := updateModel(t, m, tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	m = updated
+	if got := m.input.Value(); got != "first\n" {
+		t.Fatalf("alt+enter produced %q, want a newline", got)
+	}
+	if len(m.entries) != 0 {
+		t.Fatal("newline should not submit a prompt")
+	}
+
+	ctx, done := m.runtime.begin()
+	m.busy = true
+	updated, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = updated
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("ctrl+c did not cancel the active operation")
+	}
+	if !m.busy || m.notice == "" {
+		t.Fatalf("abort should keep busy state until completion and show notice: %#v", m)
+	}
+	m.applyAgentEvent(agent.Event{Type: agent.EventAgentEnd})
+	if m.busy {
+		t.Fatal("agent end did not clear busy state")
+	}
+	done()
+}
+
+func TestSlashCommandDoesNotReachModel(t *testing.T) {
+	h := newTestHarness(t, nil, false)
+	m := New(h)
+	m, cmd := submitText(t, m, "/not-a-command")
+	if cmd != nil {
+		t.Fatal("unknown slash command should not start async work")
+	}
+	if len(h.Agent.Messages()) != 0 {
+		t.Fatal("slash command was sent to the model")
+	}
+	last := m.entries[len(m.entries)-1]
+	if last.kind != entrySystem || !last.failed || !strings.Contains(last.text, "未知命令") {
+		t.Fatalf("unexpected error entry: %#v", last)
+	}
+}
+
+func TestUserBashAndCompaction(t *testing.T) {
+	h := newTestHarness(t, []llm.Message{llm.FauxAssistant("compact-summary")}, true)
+	for _, message := range []string{"one", "two", "three", "four", "five"} {
+		if _, err := h.Session.AppendMessage(agent.NewUserMessage(message)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	h.KeepRecent = 2
+	m := New(h)
+
+	m, cmd := submitText(t, m, "!printf shell-output")
+	if cmd == nil {
+		t.Fatal("bash command did not return async work")
+	}
+	updated, _ := updateModel(t, m, cmd())
+	m = updated
+	if m.busy || !strings.Contains(m.View(), "shell-output") {
+		t.Fatalf("bash result missing or still busy:\n%s", m.View())
+	}
+
+	m, cmd = submitText(t, m, "!exit 7")
+	m.notice = "正在中止当前任务…"
+	updated, _ = updateModel(t, m, cmd())
+	m = updated
+	lastTool := m.entries[len(m.entries)-1]
+	if !lastTool.failed || !strings.Contains(lastTool.output, "exit code 7") {
+		t.Fatalf("nonzero bash exit not marked failed: %#v", lastTool)
+	}
+	if m.notice != "" {
+		t.Fatalf("completion left stale notice %q", m.notice)
+	}
+
+	m, cmd = submitText(t, m, "/compact")
+	if cmd == nil {
+		t.Fatal("compact did not return async work")
+	}
+	updated, _ = updateModel(t, m, cmd())
+	m = updated
+	if m.busy {
+		t.Fatal("compact left model busy")
+	}
+	if !strings.Contains(m.View(), "compact-summary") || !strings.Contains(m.View(), "上下文已压缩") {
+		t.Fatalf("compacted transcript not rebuilt:\n%s", m.View())
+	}
+}
+
+func TestBranchAndResumeRebuildTranscript(t *testing.T) {
+	h := newTestHarness(t, nil, true)
+	firstID, err := h.Session.AppendMessage(agent.NewUserMessage("first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Session.AppendMessage(agent.AgentMessage{Message: llm.FauxAssistant("later")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	m := New(h)
+	if len(m.entries) != 2 {
+		t.Fatalf("initial rebuild got %d entries, want 2", len(m.entries))
+	}
+
+	m, cmd := submitText(t, m, "/branch "+firstID)
+	if cmd != nil {
+		t.Fatal("branch should be synchronous")
+	}
+	if got := len(h.Agent.Messages()); got != 1 {
+		t.Fatalf("branch left %d messages, want 1", got)
+	}
+	if len(m.entries) != 2 || m.entries[0].text != "first" || m.entries[1].kind != entrySystem {
+		t.Fatalf("branch transcript not rebuilt: %#v", m.entries)
+	}
+	if strings.Contains(m.entries[0].text, "later") {
+		t.Fatal("abandoned branch message is still visible")
+	}
+
+	m, cmd = submitText(t, m, "/resume")
+	if cmd != nil {
+		t.Fatal("resume should be synchronous")
+	}
+	if got := len(h.Agent.Messages()); got != 1 {
+		t.Fatalf("resume restored %d messages, want 1", got)
+	}
+}
+
+func TestResizeAndScrollFollowBehavior(t *testing.T) {
+	m := New(newTestHarness(t, nil, false))
+	for i := 0; i < 80; i++ {
+		m.appendSystem(strings.Repeat("x", 20), false)
+	}
+	m.refreshTranscript(true)
+	if !m.viewport.AtBottom() {
+		t.Fatal("new content should follow at bottom")
+	}
+	m.viewport.GotoTop()
+	m.appendSystem("new", false)
+	m.refreshTranscript(m.viewport.AtBottom())
+	if !m.viewport.AtTop() {
+		t.Fatal("new content pulled user away from history")
+	}
+
+	for _, size := range []struct{ width, height int }{{40, 10}, {20, 5}, {1, 1}, {2, 2}, {80, 4}} {
+		updated, _ := updateModel(t, m, tea.WindowSizeMsg{Width: size.width, Height: size.height})
+		m = updated
+		view := m.View()
+		if got := lipgloss.Height(view); got != size.height {
+			t.Errorf("view at %dx%d has height %d:\n%q", size.width, size.height, got, view)
+		}
+		if size.width >= 3 && lipgloss.Width(view) > size.width {
+			t.Errorf("view at %dx%d exceeds width: %d", size.width, size.height, lipgloss.Width(view))
+		}
+	}
+}
+
+func TestOutputPreviewIsRuneSafe(t *testing.T) {
+	if got := truncateRunes("界面上🙂", 3); got != "界面…" {
+		t.Fatalf("unexpected rune truncation: %q", got)
+	}
+	preview := outputPreview(strings.Repeat("界\n", 40))
+	if !strings.Contains(preview, "省略") {
+		t.Fatalf("long output was not summarized: %q", preview)
+	}
+}
+
+func TestRuntimeCancelDoesNotLeakIntoNextPrompt(t *testing.T) {
+	m := New(newTestHarness(t, nil, false))
+	ctx, _ := m.runtime.begin()
+	m.runtime.clearCurrent()
+	if err := ctx.Err(); err != context.Canceled {
+		t.Fatalf("finished context has error %v, want context.Canceled", err)
+	}
+}

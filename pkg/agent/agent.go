@@ -302,11 +302,15 @@ func (a *Agent) beginRun() error {
 // finishRun 收尾：失败时合成错误消息并照常发事件（对应 pi 的 handleRunFailure），
 // 保证 UI 状态机一致。
 func (a *Agent) finishRun(runErr error) {
-	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+	if runErr != nil {
+		stopReason := llm.StopError
+		if errors.Is(runErr, context.Canceled) {
+			stopReason = llm.StopAborted
+		}
 		failMsg := AgentMessage{Message: llm.Message{
 			Role:       llm.RoleAssistant,
 			Content:    []llm.Content{&llm.TextContent{Text: ""}},
-			StopReason: llm.StopError,
+			StopReason: stopReason,
 			Timestamp:  nowMs(),
 		}}
 		_ = a.emit(Event{Type: EventMessageStart, Message: &failMsg})

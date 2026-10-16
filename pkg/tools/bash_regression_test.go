@@ -69,4 +69,21 @@ func TestBashNormalStillWorks(t *testing.T) {
 	if !strings.Contains(out, "ok") || strings.Contains(out, "timed out") {
 		t.Fatalf("unexpected output: %q", out)
 	}
+	details, ok := res.Details.(tools.BashResultDetails)
+	if !ok || !details.Success || details.ExitCode != 0 {
+		t.Fatalf("unexpected success details: %#v", res.Details)
+	}
+}
+
+func TestBashResultDetailsFailure(t *testing.T) {
+	res, err := tools.Bash().Execute(context.Background(), "c1", jargs(map[string]any{
+		"command": "exit 7",
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	details, ok := res.Details.(tools.BashResultDetails)
+	if !ok || details.Success || details.ExitCode != 7 {
+		t.Fatalf("unexpected failure details: %#v", res.Details)
+	}
 }

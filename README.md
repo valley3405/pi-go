@@ -1,6 +1,6 @@
 # goagent
 
-参考 [pi](https://github.com/earendil-works/pi)（pi agent harness）架构，用 Go 实现的 AI coding agent。零外部依赖（仅标准库）。
+参考 [pi](https://github.com/earendil-works/pi)（pi agent harness）架构，用 Go 实现的 AI coding agent。核心运行时仅使用标准库，终端 UI 基于 [Bubble Tea](https://github.com/charmbracelet/bubbletea)。
 
 架构设计与 pi 的逐层映射见 [DESIGN.md](DESIGN.md)。
 
@@ -14,7 +14,8 @@ pkg/agent     Agent 运行时：双层循环、steering/follow-up 双队列、
 pkg/harness   append-only JSONL 树状会话、分支、上下文压缩、
               skills 发现与注入（SKILL.md + frontmatter，gitignore 感知）
 pkg/tools     内置编码工具：bash / read / write / edit / ls / grep
-cmd/goagent   CLI：interactive REPL 与 print 模式
+pkg/tui       Bubble Tea 全屏客户端：流式对话、工具状态、多行输入、会话命令
+cmd/goagent   CLI：TUI（默认）、行式 REPL（-repl）与 print 模式
 examples/     无 API key 的端到端演示（FauxProvider）
 ```
 
@@ -41,9 +42,15 @@ go run ./cmd/goagent -provider anthropic -model claude-sonnet-4-5 -p "..."
 export OPENAI_BASE_URL=https://api.deepseek.com/v1
 go run ./cmd/goagent -model deepseek-chat -p "..."
 
-# 交互模式（无参数启动）
+# TUI 交互模式（无参数启动）
 go run ./cmd/goagent
-# 命令：/skills  /branch <id>  /tree  /compact  /resume  /quit ；!cmd 直接跑 bash
+# Enter 发送；Shift+Enter / Alt+Enter / Ctrl+J 换行
+# PgUp/PgDn 或鼠标滚轮浏览历史；Esc/Ctrl+C 中止；空闲时 Ctrl+C 退出
+# 命令：/help  /skills  /branch <id>  /tree  /compact  /resume  /quit
+# !cmd 直接跑 bash
+
+# 行式 REPL 回退模式
+go run ./cmd/goagent -repl
 ```
 
 ## Skills
@@ -105,6 +112,5 @@ a.WaitForIdle()
 
 ## 路线图
 
-- 行式 REPL → 完整 TUI（差分渲染）
 - RPC/server 模式（pi 的 protocol/server/client 层）
 - 工具权限与容器化运行指引

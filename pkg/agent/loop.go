@@ -227,14 +227,19 @@ func streamAssistantResponse(ctx context.Context, curCtx *Context, cfg loopConfi
 			return fm, emit(Event{Type: EventMessageEnd, Message: &fm})
 		}
 	}
-	// 流异常结束（未发 done/error）
+	// 流异常结束（未发 done/error）也要补齐 message_* 终态，保证 UI 与会话一致。
 	final, ferr := stream.Result()
 	fm := AgentMessage{Message: final}
-	if fm.StopReason == "" {
+	if ferr != nil || fm.StopReason == "" {
 		fm.StopReason = llm.StopError
 	}
-	if ferr != nil {
-		return fm, nil // 错误已通过 stopReason 传递，事件流保持一致
+	if partial != nil {
+		curCtx.Messages[len(curCtx.Messages)-1] = fm
+	} else {
+		curCtx.Messages = append(curCtx.Messages, fm)
+		if err := emit(Event{Type: EventMessageStart, Message: &fm}); err != nil {
+			return AgentMessage{}, err
+		}
 	}
 	return fm, emit(Event{Type: EventMessageEnd, Message: &fm})
 }
