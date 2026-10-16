@@ -199,10 +199,11 @@ type AgentTool interface {
 ## 7. pkg/tui + cmd/goagent —— 终端客户端
 
 - **TUI 模式（默认）**：Bubble Tea 全屏应用，Bubbles viewport/textarea 分别负责历史滚动与多行输入，Lip Gloss 负责样式和自适应布局。`Agent.Subscribe` 的生命周期事件通过 `Program.Send` 转入 UI 更新循环，assistant 流式内容与并行工具状态按事件归并。
+- **运行轨迹**：thinking 与工具调用/输出带活动状态。`auto` 模式下活动中展开、结束后折叠并保留摘要；`expanded`/`collapsed` 手动控制全部轨迹，Ctrl+O 切换，`/trace auto|expand|collapse` 精确设置。
 - **异步操作**：prompt、compaction 和用户 bash 都作为 `tea.Cmd` 执行；Esc/Ctrl+C 通过 context 与 `Agent.Abort()` 中止。Enter 发送，Alt+Enter 等组合键换行，PgUp/PgDn/鼠标滚轮浏览历史。
 - **REPL 回退**：`goagent -repl` 保留原 stdlib `bufio` 行式界面，适合不需要全屏控制的环境。
 - **print 模式**：`goagent -p "prompt"`，流式输出文本，工具调用打印摘要，退出码反映 stopReason。
-- 会话命令：`/help`、`/skills`、`/branch <id>`、`/compact`、`/tree`、`/resume`、`/quit`；`!cmd` 执行 bash 并在当前界面显示输出，不注入模型上下文。
+- 会话命令：`/help`、`/skills`、`/branch <id>`、`/compact`、`/trace`、`/tree`、`/resume`、`/quit`；`!cmd` 执行 bash 并在当前界面显示输出，不注入模型上下文。
 - 配置：环境变量 `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`GOAGENT_MODEL`、`ANTHROPIC_API_KEY`；会话文件默认 `~/.goagent/sessions/`。
 
 ## 8. 与 pi 的差异（刻意决策）

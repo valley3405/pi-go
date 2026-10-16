@@ -401,6 +401,108 @@ func TestResizeAndScrollFollowBehavior(t *testing.T) {
 	}
 }
 
+func TestThinkingTraceAutoAndManualFolding(t *testing.T) {
+	m := New(newTestHarness(t, nil, false))
+	thinking := "plan first\n" + strings.Repeat("reasoning ", 24) + "\nTHINKING_TAIL"
+	message := agent.AgentMessage{Message: llm.Message{Role: llm.RoleAssistant}}
+	m = applyAgentEvent(t, m, agent.Event{Type: agent.EventMessageStart, Message: &message})
+	message.Content = []llm.Content{
+		&llm.ThinkingContent{Thinking: thinking},
+		&llm.TextContent{Text: "final answer"},
+	}
+	m = applyAgentEvent(t, m, agent.Event{Type: agent.EventMessageUpdate, Message: &message})
+	if !m.entries[0].running {
+		t.Fatal("streaming assistant entry should be active")
+	}
+	if view := m.View(); !strings.Contains(view, "Thinking [running]") || !strings.Contains(view, "THINKING_TAIL") {
+		t.Fatalf("active thinking was not expanded:\n%s", view)
+	}
+
+	message.StopReason = llm.StopStop
+	m = applyAgentEvent(t, m, agent.Event{Type: agent.EventMessageEnd, Message: &message})
+	if m.entries[0].running {
+		t.Fatal("completed assistant entry is still active")
+	}
+	view := m.View()
+	if !strings.Contains(view, "Thinking [folded") || !strings.Contains(view, "plan first") || !strings.Contains(view, "final answer") {
+		t.Fatalf("completed thinking summary missing:\n%s", view)
+	}
+	if strings.Contains(view, "THINKING_TAIL") {
+		t.Fatalf("completed thinking was not automatically folded:\n%s", view)
+	}
+
+	updated, _ := updateModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlO})
+	m = updated
+	if m.traceMode != traceModeExpanded || !strings.Contains(m.View(), "THINKING_TAIL") {
+		t.Fatalf("ctrl+o did not expand trace: mode=%s\n%s", m.traceMode, m.View())
+	}
+	updated, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlO})
+	m = updated
+	if m.traceMode != traceModeCollapsed || strings.Contains(m.View(), "THINKING_TAIL") {
+		t.Fatalf("ctrl+o did not collapse trace: mode=%s\n%s", m.traceMode, m.View())
+	}
+}
+
+func TestToolTraceAutoFolding(t *testing.T) {
+	m := New(newTestHarness(t, nil, false))
+	output := "first line\n" + strings.Repeat("working output ", 20) + "\nTOOL_TAIL"
+	m = applyAgentEvent(t, m, agent.Event{
+		Type: agent.EventToolExecutionStart, ToolCallID: "trace-call", ToolName: "bash", Args: json.RawMessage(`{"command":"long"}`),
+	})
+	m = applyAgentEvent(t, m, agent.Event{
+		Type: agent.EventToolExecutionUpdate, ToolCallID: "trace-call", ToolName: "bash",
+		PartialResult: &agent.ToolResult{Content: []llm.Content{&llm.TextContent{Text: output}}},
+	})
+	if view := m.View(); !strings.Contains(view, "[running]") || !strings.Contains(view, "TOOL_TAIL") {
+		t.Fatalf("active tool output was not expanded:\n%s", view)
+	}
+
+	m = applyAgentEvent(t, m, agent.Event{
+		Type: agent.EventToolExecutionEnd, ToolCallID: "trace-call", ToolName: "bash", IsError: true,
+		Result: &agent.ToolResult{Content: []llm.Content{&llm.TextContent{Text: output}}},
+	})
+	m = applyAgentEvent(t, m, agent.Event{Type: agent.EventAgentEnd})
+	view := m.View()
+	for _, want := range []string{"trace-call", "[error]", "output [folded", "first line"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("folded tool trace does not contain %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "TOOL_TAIL") {
+		t.Fatalf("completed tool output was not automatically folded:\n%s", view)
+	}
+}
+
+func TestTraceCommands(t *testing.T) {
+	m := New(newTestHarness(t, nil, false))
+	for _, test := range []struct {
+		command string
+		want    traceMode
+	}{
+		{"/trace expand", traceModeExpanded},
+		{"/trace collapse", traceModeCollapsed},
+		{"/trace auto", traceModeAuto},
+	} {
+		updated, cmd := submitText(t, m, test.command)
+		m = updated
+		if cmd != nil {
+			t.Fatalf("%s returned unexpected async work", test.command)
+		}
+		if m.traceMode != test.want {
+			t.Fatalf("%s set mode %s, want %s", test.command, m.traceMode, test.want)
+		}
+	}
+
+	m, cmd := submitText(t, m, "/trace")
+	if cmd != nil || !strings.Contains(m.entries[len(m.entries)-1].text, "当前运行轨迹模式：auto") {
+		t.Fatalf("/trace did not report current mode: %#v", m.entries[len(m.entries)-1])
+	}
+	m, cmd = submitText(t, m, "/trace invalid")
+	if cmd != nil || !m.entries[len(m.entries)-1].failed || m.traceMode != traceModeAuto {
+		t.Fatalf("invalid /trace changed state incorrectly: mode=%s entry=%#v", m.traceMode, m.entries[len(m.entries)-1])
+	}
+}
+
 func TestOutputPreviewIsRuneSafe(t *testing.T) {
 	if got := truncateRunes("界面上🙂", 3); got != "界面…" {
 		t.Fatalf("unexpected rune truncation: %q", got)

@@ -82,6 +82,7 @@ func (m Model) statusView() string {
 			status += " · no session"
 		}
 	}
+	status += " · trace:" + m.traceMode.String()
 	style := mutedStyle
 	if m.notice != "" && !m.busy {
 		style = errorStyle
@@ -90,7 +91,7 @@ func (m Model) statusView() string {
 }
 
 func (m Model) helpView() string {
-	help := "Enter 发送 · Alt+Enter 换行 · PgUp/PgDn 滚动 · Esc 中止 · Ctrl+C 中止/退出"
+	help := "Enter 发送 · Alt+Enter 换行 · Ctrl+O 轨迹 · PgUp/PgDn 滚动 · Esc/Ctrl+C 中止/退出"
 	return mutedStyle.MaxWidth(m.width).Render(help)
 }
 
@@ -141,12 +142,23 @@ func (m Model) renderTranscript(width int) string {
 		if i > 0 {
 			b.WriteString("\n\n")
 		}
-		b.WriteString(renderEntry(entry, width))
+		b.WriteString(renderEntry(entry, width, m.traceExpanded(entry)))
 	}
 	return b.String()
 }
 
-func renderEntry(entry transcriptEntry, width int) string {
+func (m Model) traceExpanded(entry transcriptEntry) bool {
+	switch m.traceMode {
+	case traceModeExpanded:
+		return true
+	case traceModeCollapsed:
+		return false
+	default:
+		return entry.running
+	}
+}
+
+func renderEntry(entry transcriptEntry, width int, expandTrace bool) string {
 	width = max(1, width)
 	switch entry.kind {
 	case entryUser:
@@ -170,7 +182,17 @@ func renderEntry(entry transcriptEntry, width int) string {
 		}
 		var prefix string
 		if entry.thinking != "" {
-			prefix = thinkingStyle.Render("Thinking\n"+entry.thinking) + "\n\n"
+			var trace string
+			if expandTrace {
+				label := "Thinking"
+				if entry.running {
+					label += " [running]"
+				}
+				trace = label + "\n" + entry.thinking
+			} else {
+				trace = fmt.Sprintf("Thinking [folded · %d chars]\n%s", len([]rune(entry.thinking)), singleLine(entry.thinking, 160))
+			}
+			prefix = thinkingStyle.Render(trace) + "\n\n"
 		}
 		return renderMessage(agentLabelStyle.Render("Agent"), prefix+body, bodyStyle, width)
 	case entryTool:
@@ -190,11 +212,21 @@ func renderEntry(entry transcriptEntry, width int) string {
 		b.WriteString(label)
 		if entry.args != "" {
 			b.WriteByte('\n')
-			b.WriteString(mutedStyle.Render("args: " + singleLine(entry.args, 240)))
+			if expandTrace {
+				b.WriteString(mutedStyle.Width(width).MaxWidth(width).Render("args: " + strings.TrimSpace(entry.args)))
+			} else {
+				b.WriteString(mutedStyle.MaxWidth(width).Render("args: " + singleLine(entry.args, 160)))
+			}
 		}
 		if entry.output != "" {
 			b.WriteByte('\n')
-			b.WriteString(toolOutputStyle.Width(width).MaxWidth(width).Render(outputPreview(entry.output)))
+			if expandTrace {
+				b.WriteString(toolOutputStyle.Width(width).MaxWidth(width).Render(outputPreview(entry.output)))
+			} else {
+				lines := len(strings.Split(entry.output, "\n"))
+				summary := fmt.Sprintf("output [folded · %d lines]: %s", lines, singleLine(entry.output, 160))
+				b.WriteString(toolOutputStyle.MaxWidth(width).Render(summary))
+			}
 		}
 		return b.String()
 	case entrySystem:

@@ -46,8 +46,10 @@ go run ./cmd/goagent -model deepseek-chat -p "..."
 go run ./cmd/goagent
 # Enter 发送；Shift+Enter / Alt+Enter / Ctrl+J 换行
 # PgUp/PgDn 或鼠标滚轮浏览历史；Esc/Ctrl+C 中止；空闲时 Ctrl+C 退出
+# thinking 和工具轨迹默认活动中展开、结束后自动折叠
+# Ctrl+O 手动展开/折叠轨迹；/trace auto 恢复自动模式
 # 命令：/help  /skills  /branch <id>  /tree  /compact  /resume  /quit
-# !cmd 直接跑 bash
+# 轨迹：/trace auto|expand|collapse；!cmd 直接跑 bash
 
 # 行式 REPL 回退模式
 go run ./cmd/goagent -repl

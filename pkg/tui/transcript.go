@@ -108,6 +108,9 @@ func (m *Model) applyAgentEvent(event agent.Event) {
 		m.busy = false
 		m.activity = ""
 		m.notice = ""
+		for i := range m.entries {
+			m.entries[i].running = false
+		}
 		m.runtime.clearCurrent()
 	case agent.EventTurnStart:
 		if m.activity == "" {
@@ -171,7 +174,9 @@ func (m *Model) applyMessageEvent(event agent.Event) {
 		if role == llm.RoleAssistant {
 			m.activity = "正在生成…"
 		}
-		m.entries = append(m.entries, messageEntry(event.Message.Message))
+		entry := messageEntry(event.Message.Message)
+		entry.running = role == llm.RoleAssistant
+		m.entries = append(m.entries, entry)
 		m.currentEntry = len(m.entries) - 1
 		return
 	}
@@ -179,16 +184,19 @@ func (m *Model) applyMessageEvent(event agent.Event) {
 		return
 	}
 
+	entry := messageEntry(event.Message.Message)
+	entry.running = role == llm.RoleAssistant && event.Type != agent.EventMessageEnd
 	index := m.currentEntry
 	if index < 0 || index >= len(m.entries) {
-		m.entries = append(m.entries, messageEntry(event.Message.Message))
+		m.entries = append(m.entries, entry)
 		index = len(m.entries) - 1
+		m.currentEntry = index
 	} else {
-		m.entries[index] = messageEntry(event.Message.Message)
+		m.entries[index] = entry
 	}
 
 	if event.Type == agent.EventMessageEnd {
-		entry := m.entries[index]
+		entry = m.entries[index]
 		if role == llm.RoleAssistant && entry.text == "" && entry.thinking == "" && !entry.failed {
 			m.entries = append(m.entries[:index], m.entries[index+1:]...)
 			m.reindexTools(index)

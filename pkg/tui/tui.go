@@ -84,6 +84,25 @@ type bashDoneMsg struct {
 	failed bool
 }
 
+type traceMode uint8
+
+const (
+	traceModeAuto traceMode = iota
+	traceModeExpanded
+	traceModeCollapsed
+)
+
+func (m traceMode) String() string {
+	switch m {
+	case traceModeExpanded:
+		return "expanded"
+	case traceModeCollapsed:
+		return "collapsed"
+	default:
+		return "auto"
+	}
+}
+
 // Model is the Bubble Tea model for an agent session.
 type Model struct {
 	harness *harness.Harness
@@ -100,6 +119,7 @@ type Model struct {
 	busy         bool
 	activity     string
 	notice       string
+	traceMode    traceMode
 }
 
 // New creates a TUI model backed by h.
@@ -239,6 +259,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.resize(m.width, m.height)
 			}
 			return m, nil
+		case "ctrl+o":
+			follow := m.viewport.AtBottom()
+			if m.traceMode == traceModeExpanded || (m.traceMode == traceModeAuto && m.busy) {
+				m.traceMode = traceModeCollapsed
+			} else {
+				m.traceMode = traceModeExpanded
+			}
+			m.refreshTranscript(follow)
+			return m, nil
 		case "enter":
 			return m.submit()
 		case "pgup", "pgdown":
@@ -329,6 +358,30 @@ func (m Model) executeSlashCommand(text string) (tea.Model, tea.Cmd) {
 			m.rebuildTranscript()
 			m.appendSystem(fmt.Sprintf("会话已恢复，共 %d 条消息", len(m.harness.Agent.Messages())), false)
 		}
+	case "/trace":
+		if len(fields) == 1 {
+			m.appendSystem("当前运行轨迹模式："+m.traceMode.String()+"\n用法：/trace auto|expand|collapse", false)
+			break
+		}
+		if len(fields) != 2 {
+			m.appendSystem("用法：/trace auto|expand|collapse", true)
+			break
+		}
+		valid := true
+		switch fields[1] {
+		case "auto":
+			m.traceMode = traceModeAuto
+		case "expand":
+			m.traceMode = traceModeExpanded
+		case "collapse":
+			m.traceMode = traceModeCollapsed
+		default:
+			m.appendSystem("未知轨迹模式 "+fields[1]+"，用法：/trace auto|expand|collapse", true)
+			valid = false
+		}
+		if valid {
+			m.appendSystem("运行轨迹模式："+m.traceMode.String(), false)
+		}
 	case "/compact":
 		m.busy = true
 		m.activity = "正在压缩上下文…"
@@ -415,6 +468,7 @@ const helpText = `可用命令：
   /tree             查看当前 session 分支
   /branch <id>      从历史 entry 创建分支
   /compact          压缩当前上下文
+  /trace <mode>     运行轨迹：auto / expand / collapse（Ctrl+O 手动切换）
   /resume           重新加载当前 session
   /quit, /exit      退出
   !<command>        直接执行 bash 命令`
