@@ -26,8 +26,12 @@ func (s usageStats) status() string {
 	if s.responses == 0 {
 		return ""
 	}
-	return fmt.Sprintf("tokens in %s out %s · total %s",
+	status := fmt.Sprintf("tokens in %s out %s · total %s",
 		formatTokenCount(s.last.Input), formatTokenCount(s.last.Output), formatTokenCount(s.total.Total()))
+	if rate, ok := s.total.CacheHitRate(); ok {
+		status += fmt.Sprintf(" · cache %.1f%%", rate*100)
+	}
+	return status
 }
 
 func (s usageStats) detail() string {
@@ -49,6 +53,9 @@ func writeUsageExtras(b *strings.Builder, usage llm.Usage) {
 	}
 	if usage.CacheWrite > 0 {
 		fmt.Fprintf(b, " · cacheWrite %d", usage.CacheWrite)
+	}
+	if rate, ok := usage.CacheHitRate(); ok {
+		fmt.Fprintf(b, " · cacheHit %.1f%%", rate*100)
 	}
 	if usage.Cost != 0 {
 		fmt.Fprintf(b, " · cost %.6f", usage.Cost)

@@ -147,7 +147,7 @@ func TestPromptStreamsToolsAndRenders(t *testing.T) {
 		t.Fatalf("unexpected final assistant entry: %#v", m.entries[3])
 	}
 	view := m.View()
-	for _, want := range []string{"run the tool", "working", "bash", "tool-output", "done", "tokens in 130 out 30 · total 280"} {
+	for _, want := range []string{"run the tool", "working", "bash", "tool-output", "done", "tokens in 130 out 30 · total 280", "cache 17.4%"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view does not contain %q:\n%s", want, view)
 		}
@@ -168,7 +168,7 @@ func TestPromptStreamsToolsAndRenders(t *testing.T) {
 		t.Fatal("/usage returned unexpected async work")
 	}
 	detail := m.entries[len(m.entries)-1].text
-	for _, want := range []string{"最近响应：input 130 · output 30 · total 160", "累计（2 次 assistant 响应）：input 230 · output 50 · total 280 · cacheRead 40"} {
+	for _, want := range []string{"最近响应：input 130 · output 30 · total 160 · cacheHit 0.0%", "累计（2 次 assistant 响应）：input 230 · output 50 · total 280 · cacheRead 40 · cacheHit 17.4%"} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("/usage detail does not contain %q:\n%s", want, detail)
 		}

@@ -48,7 +48,7 @@ go run ./cmd/goagent
 # PgUp/PgDn 或鼠标滚轮浏览历史；Esc/Ctrl+C 中止；空闲时 Ctrl+C 退出
 # thinking 和工具轨迹默认活动中展开、结束后自动折叠
 # Ctrl+O 手动展开/折叠轨迹；/trace auto 恢复自动模式
-# 状态栏显示最近 input/output 和当前分支累计 total；/usage 查看缓存等明细
+# 状态栏显示最近 input/output、当前分支累计 total/cache 命中率；/usage 查看明细
 # 命令：/help  /skills  /branch <id>  /tree  /compact  /resume  /usage  /quit
 # 轨迹：/trace auto|expand|collapse；!cmd 直接跑 bash
 

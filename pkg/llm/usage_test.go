@@ -27,6 +27,20 @@ func TestUsageTotalAndAdd(t *testing.T) {
 	}
 }
 
+func TestUsageCacheHitRate(t *testing.T) {
+	rate, ok := (Usage{Input: 100, CacheRead: 40}).CacheHitRate()
+	if !ok || rate != 0.4 {
+		t.Fatalf("cache hit rate = %v, %v; want 0.4, true", rate, ok)
+	}
+	rate, ok = (Usage{Input: 100}).CacheHitRate()
+	if !ok || rate != 0 {
+		t.Fatalf("zero cache hit rate = %v, %v; want 0, true", rate, ok)
+	}
+	if _, ok = (Usage{Output: 10}).CacheHitRate(); ok {
+		t.Fatal("usage without input should not have a cache hit rate")
+	}
+}
+
 func TestConsumeOAISSEUsage(t *testing.T) {
 	for _, test := range []struct {
 		name      string
@@ -81,9 +95,12 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Usage{Input: 100, Output: 20, CacheRead: 40, CacheWrite: 10, TotalTokens: 170}
+	want := Usage{Input: 150, Output: 20, CacheRead: 40, CacheWrite: 10, TotalTokens: 170}
 	if result.Usage != want {
 		t.Fatalf("usage = %+v, want %+v", result.Usage, want)
+	}
+	if rate, ok := result.Usage.CacheHitRate(); !ok || rate != 40.0/150.0 {
+		t.Fatalf("cache hit rate = %v, %v; want %v, true", rate, ok, 40.0/150.0)
 	}
 	if result.Text() != "hi" {
 		t.Fatalf("text = %q, want hi", result.Text())

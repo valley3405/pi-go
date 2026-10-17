@@ -309,7 +309,8 @@ func consumeAntSSE(r io.Reader, s *EventStream) error {
 	default:
 		partial.StopReason = StopStop
 	}
-	usage.TotalTokens = usage.Input + usage.Output + usage.CacheRead + usage.CacheWrite
+	usage.Input += usage.CacheRead + usage.CacheWrite
+	usage.TotalTokens = usage.Input + usage.Output
 	partial.Usage = usage
 	s.Push(Event{Type: EventDone, Partial: partial})
 	s.Finish(partial, nil)

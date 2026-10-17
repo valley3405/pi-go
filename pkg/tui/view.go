@@ -75,15 +75,15 @@ func (m Model) statusView() string {
 	case m.busy:
 		status = "● working"
 	}
+	if usage := m.usage.status(); usage != "" {
+		status += " · " + usage
+	}
 	if !m.busy && m.notice == "" {
 		if m.harness.Session != nil {
 			status += " · session " + m.harness.Session.ID()
 		} else {
 			status += " · no session"
 		}
-	}
-	if usage := m.usage.status(); usage != "" {
-		status += " · " + usage
 	}
 	status += " · trace:" + m.traceMode.String()
 	style := mutedStyle

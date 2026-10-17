@@ -66,6 +66,7 @@ type ImageContent struct {
 func (c *ImageContent) contentType() string { return "image" }
 
 // Usage 是 token 与成本统计（对应 pi 的 Usage）。
+// Input 统一表示包含 cacheRead/cacheWrite 的总输入 token，缓存是 Input 的子项。
 type Usage struct {
 	Input       int     `json:"input"`
 	Output      int     `json:"output"`
@@ -81,6 +82,14 @@ func (u Usage) Total() int {
 		return u.TotalTokens
 	}
 	return u.Input + u.Output
+}
+
+// CacheHitRate 返回 cacheRead 占总输入的比例；input 为 0 时没有有效命中率。
+func (u Usage) CacheHitRate() (float64, bool) {
+	if u.Input <= 0 {
+		return 0, false
+	}
+	return float64(u.CacheRead) / float64(u.Input), true
 }
 
 // IsZero 报告 provider 是否未返回任何用量数据。
