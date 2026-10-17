@@ -71,18 +71,166 @@ func TestCompactionEntryRebuild(t *testing.T) {
 	defer s.Close()
 
 	_, _ = s.AppendMessage(agent.NewUserMessage("old message"))
+	keptID, _ := s.AppendMessage(agent.NewUserMessage("kept message"))
 	_, _ = s.AppendCustom(harness.EntryCompaction, harness.CompactionPayload{
-		Summary: "summary of old stuff", TokensBefore: 100,
+		Summary: "summary of old stuff", FirstKeptEntryID: keptID, TokensBefore: 100,
 	})
 	_, _ = s.AppendMessage(agent.NewUserMessage("recent"))
 
-	msgs, _ := s.Messages()
-	if len(msgs) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	msgs, err := s.Messages()
+	if err != nil {
+		t.Fatal(err)
 	}
-	// 压缩摘要应作为 user 消息出现
-	if got := msgs[1].Text(); got == "" || got[:7] != "[Contex" {
-		t.Fatalf("compaction summary message missing: %q", got)
+	if len(msgs) != 3 {
+		t.Fatalf("expected summary + 2 kept messages, got %d", len(msgs))
+	}
+	if got := msgs[0].Text(); got != "[Context compaction] Earlier conversation was summarized:\n\nsummary of old stuff" {
+		t.Fatalf("compaction summary missing or misplaced: %q", got)
+	}
+	if got := msgs[1].Text(); got != "kept message" {
+		t.Fatalf("expected kept message, got %q", got)
+	}
+	if got := msgs[2].Text(); got != "recent" {
+		t.Fatalf("expected recent message, got %q", got)
+	}
+}
+
+func TestCompactTruncatesContextAcrossCompactionAndResume(t *testing.T) {
+	faux := llm.NewFauxProvider("faux", []llm.Message{
+		llm.FauxAssistant("first summary"),
+		llm.FauxAssistant("second summary"),
+	}, 16)
+	reg := llm.NewRegistry()
+	reg.SetProvider(faux)
+	model, _ := reg.GetModel("faux", "faux-1")
+
+	s, err := harness.CreateSession(t.TempDir(), "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	var entryIDs []string
+	for _, text := range []string{"one", "two", "three", "four", "five", "six"} {
+		id, err := s.AppendMessage(agent.NewUserMessage(text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		entryIDs = append(entryIDs, id)
+	}
+
+	assertCompacted := func(msgs []agent.AgentMessage, summary string) {
+		t.Helper()
+		if len(msgs) != 3 {
+			t.Fatalf("expected summary + 2 kept messages, got %d", len(msgs))
+		}
+		if got := msgs[0].Text(); got != "[Context compaction] Earlier conversation was summarized:\n\n"+summary {
+			t.Fatalf("unexpected compaction summary: %q", got)
+		}
+		if got := msgs[1].Text(); got != "five" {
+			t.Fatalf("expected first kept message %q, got %q", "five", got)
+		}
+		if got := msgs[2].Text(); got != "six" {
+			t.Fatalf("expected second kept message %q, got %q", "six", got)
+		}
+	}
+
+	if _, err := harness.Compact(context.Background(), s, reg.StreamSimple, model, llm.StreamOptions{}, 2); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := s.Messages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCompacted(msgs, "first summary")
+
+	if _, err := harness.Compact(context.Background(), s, reg.StreamSimple, model, llm.StreamOptions{}, 2); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err = s.Messages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCompacted(msgs, "second summary")
+	lastCompactionID := s.LeafID()
+
+	path := s.Path()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := harness.OpenSession(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	msgs, err = reopened.Messages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCompacted(msgs, "second summary")
+
+	if err := reopened.Branch(entryIDs[1]); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err = reopened.Messages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 || msgs[0].Text() != "one" || msgs[1].Text() != "two" {
+		t.Fatalf("branch before compaction should retain raw history: %v", msgs)
+	}
+
+	if err := reopened.Branch(lastCompactionID); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err = reopened.Messages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCompacted(msgs, "second summary")
+}
+
+func TestCompactDoesNotKeepOrphanToolResult(t *testing.T) {
+	faux := llm.NewFauxProvider("faux", []llm.Message{llm.FauxAssistant("summary")}, 16)
+	reg := llm.NewRegistry()
+	reg.SetProvider(faux)
+	model, _ := reg.GetModel("faux", "faux-1")
+
+	s, err := harness.CreateSession(t.TempDir(), "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	_, _ = s.AppendMessage(agent.NewUserMessage("read a file"))
+	_, _ = s.AppendMessage(agent.AgentMessage{Message: llm.Message{
+		Role: llm.RoleAssistant,
+		Content: []llm.Content{&llm.ToolCallContent{
+			ID: "call-1", Name: "read", Arguments: []byte(`{"path":"a.txt"}`),
+		}},
+	}})
+	_, _ = s.AppendMessage(agent.AgentMessage{Message: llm.NewToolResultMessage(
+		"call-1", "read", []llm.Content{&llm.TextContent{Text: "file contents"}}, false,
+	)})
+	_, _ = s.AppendMessage(agent.NewUserMessage("next request"))
+
+	if _, err := harness.Compact(context.Background(), s, reg.StreamSimple, model, llm.StreamOptions{}, 2); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := s.Messages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected summary + latest user message, got %d messages", len(msgs))
+	}
+	for _, msg := range msgs {
+		if msg.Role == llm.RoleToolResult {
+			t.Fatalf("kept context contains an orphan tool result: %v", msgs)
+		}
+	}
+	if got := msgs[1].Text(); got != "next request" {
+		t.Fatalf("expected latest user message, got %q", got)
 	}
 }
 

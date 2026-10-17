@@ -12,17 +12,17 @@
 
 ## P0：正确性与安全基线
 
-### 1. 修复 compaction 实际未裁剪上下文的问题
+### 1. 修复 compaction 实际未裁剪上下文的问题（已完成）
 
 位置：`pkg/harness/compaction.go`、`pkg/harness/session.go`、`pkg/harness/session_test.go`
 
-现状：`Compact()` 会追加摘要，但 `Session.Messages()` 仍保留全部旧消息，只把摘要追加到后面；`FirstKeptEntryID` 也没有参与重建。当前实现与 `DESIGN.md` 中“摘要替代被压缩区段”的设计不一致。
+原问题：`Compact()` 只追加摘要，`Session.Messages()` 仍保留全部旧消息，且未使用 `FirstKeptEntryID`。现已按“摘要 + 保留尾部”重建上下文。
 
-- [ ] 正确定义并写入第一个未压缩 entry 的 ID，不再直接使用压缩前的 `LeafID()`。
-- [ ] 重建当前分支时，将上下文恢复为“压缩摘要 + 保留的最近消息”，旧消息仅保留在 append-only JSONL 中，不再进入 LLM 上下文。
-- [ ] 处理连续多次压缩、压缩后 Branch、重新 OpenSession/Resume 等路径。
-- [ ] 选择压缩边界时避免产生孤立的 `toolCall` 或 `toolResult`。
-- [ ] 同步修正 `DESIGN.md`、相关注释和现有测试预期。
+- [x] 正确定义并写入第一个未压缩 entry 的 ID，不再直接使用压缩前的 `LeafID()`。
+- [x] 重建当前分支时，将上下文恢复为“压缩摘要 + 保留的最近消息”，旧消息仅保留在 append-only JSONL 中，不再进入 LLM 上下文。
+- [x] 处理连续多次压缩、压缩后 Branch、重新 OpenSession/Resume 等路径。
+- [x] 选择压缩边界时避免产生孤立的 `toolCall` 或 `toolResult`。
+- [x] 同步修正 `DESIGN.md`、相关注释和现有测试预期。
 
 验收：例如 10 条消息、保留最近 4 条时，重建结果为 1 条摘要加 4 条最近消息；重复压缩和分支恢复结果一致，重建后的估算 token 数确实下降。
 

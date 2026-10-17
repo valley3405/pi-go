@@ -259,12 +259,30 @@ func (s *Session) Entries() []*Entry {
 	return s.pathFromRoot()
 }
 
+type messageRef struct {
+	entryID string
+	message agent.AgentMessage
+}
+
 // Messages 重建当前分支的消息序列（对应 pi 的 buildSessionContext）。
 // 遇到 compaction entry 时用摘要替换被压缩区段。
 func (s *Session) Messages() ([]agent.AgentMessage, error) {
+	refs, err := s.messageRefs()
+	if err != nil {
+		return nil, err
+	}
+	var msgs []agent.AgentMessage
+	for _, ref := range refs {
+		msgs = append(msgs, ref.message)
+	}
+	return msgs, nil
+}
+
+func (s *Session) messageRefs() ([]messageRef, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var msgs []agent.AgentMessage
+
+	var refs []messageRef
 	for _, e := range s.pathFromRoot() {
 		switch e.Type {
 		case EntryMessage:
@@ -272,22 +290,40 @@ func (s *Session) Messages() ([]agent.AgentMessage, error) {
 			if err := json.Unmarshal(e.Payload, &p); err != nil {
 				return nil, err
 			}
-			msgs = append(msgs, p.Message)
+			refs = append(refs, messageRef{entryID: e.ID, message: p.Message})
 		case EntryCompaction:
 			var p CompactionPayload
 			if err := json.Unmarshal(e.Payload, &p); err != nil {
 				return nil, err
 			}
-			msgs = append(msgs, agent.AgentMessage{Message: compactionSummaryMessage(p.Summary)})
+			summary := messageRef{entryID: e.ID, message: agent.AgentMessage{Message: compactionSummaryMessage(p.Summary)}}
+			if p.FirstKeptEntryID == "" {
+				refs = []messageRef{summary}
+				continue
+			}
+			firstKept := -1
+			for i := range refs {
+				if refs[i].entryID == p.FirstKeptEntryID {
+					firstKept = i
+					break
+				}
+			}
+			if firstKept < 0 {
+				// 旧格式或损坏的 entry 没有可用边界时保留上下文，避免静默丢消息。
+				refs = append(refs, summary)
+				continue
+			}
+			kept := append([]messageRef(nil), refs[firstKept:]...)
+			refs = append([]messageRef{summary}, kept...)
 		case EntryBranchSummary:
 			var p BranchSummaryPayload
 			if err := json.Unmarshal(e.Payload, &p); err != nil {
 				return nil, err
 			}
-			msgs = append(msgs, agent.AgentMessage{Message: branchSummaryMessage(p.Summary)})
+			refs = append(refs, messageRef{entryID: e.ID, message: agent.AgentMessage{Message: branchSummaryMessage(p.Summary)}})
 		}
 	}
-	return msgs, nil
+	return refs, nil
 }
 
 // compactionSummaryMessage 把压缩摘要包装成一条 user 消息注入上下文

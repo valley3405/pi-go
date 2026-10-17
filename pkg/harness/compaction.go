@@ -23,16 +23,29 @@ Be concise but complete. Write in the same language as the conversation.`
 //
 // keepRecent 指定保留最近几条消息不压缩。
 func Compact(ctx context.Context, s *Session, streamFn llm.StreamFn, model llm.Model, opts llm.StreamOptions, keepRecent int) (string, error) {
-	msgs, err := s.Messages()
+	if keepRecent < 0 {
+		return "", fmt.Errorf("keepRecent must be non-negative")
+	}
+	refs, err := s.messageRefs()
 	if err != nil {
 		return "", err
 	}
-	if len(msgs) <= keepRecent {
-		return "", fmt.Errorf("nothing to compact (%d messages, keepRecent=%d)", len(msgs), keepRecent)
+	if len(refs) <= keepRecent {
+		return "", fmt.Errorf("nothing to compact (%d messages, keepRecent=%d)", len(refs), keepRecent)
 	}
 
-	cut := len(msgs) - keepRecent
-	toSummarize := msgs[:cut]
+	cut := len(refs) - keepRecent
+	for cut < len(refs) && refs[cut].message.Role == llm.RoleToolResult {
+		cut++
+	}
+	toSummarize := make([]agent.AgentMessage, cut)
+	for i := range toSummarize {
+		toSummarize[i] = refs[i].message
+	}
+	firstKeptEntryID := ""
+	if cut < len(refs) {
+		firstKeptEntryID = refs[cut].entryID
+	}
 
 	var b strings.Builder
 	for _, m := range toSummarize {
@@ -63,7 +76,7 @@ func Compact(ctx context.Context, s *Session, streamFn llm.StreamFn, model llm.M
 
 	_, err = s.AppendCustom(EntryCompaction, CompactionPayload{
 		Summary:          summary,
-		FirstKeptEntryID: s.LeafID(),
+		FirstKeptEntryID: firstKeptEntryID,
 		TokensBefore:     estimateTokens(toSummarize),
 	})
 	return summary, err

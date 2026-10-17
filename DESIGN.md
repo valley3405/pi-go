@@ -173,6 +173,8 @@ type AgentTool interface {
 
 上下文接近窗口上限时，调 LLM 对旧消息生成摘要，append `CompactionEntry{summary, firstKeptEntryID, tokensBefore}`。对应 pi 的 `transformContext` + compaction entry 的组合。
 
+重建上下文时，`firstKeptEntryID` 定位未压缩尾部，最终序列为 `summary + kept messages`；原始 entry 仍全部保留在 JSONL 中。若保留边界落在 `toolResult` 前，则将该结果及其之前的调用一并压缩，避免恢复出孤立的工具结果。
+
 ### 5.3 Harness 组装
 
 `Harness` 持有 `*agent.Agent` + `*Session`：订阅 agent 事件自动落盘；提供 `Prompt / Branch / Compact / Resume`；崩溃恢复 = 重新读 JSONL 重放到 leaf。
