@@ -34,12 +34,16 @@ func (m *Model) rebuildTranscript() {
 	m.entries = nil
 	m.toolEntries = make(map[string]int)
 	m.currentEntry = -1
+	m.usage = usageStats{}
 	for _, message := range m.harness.Agent.Messages() {
 		if message.Custom {
 			continue
 		}
 		switch message.Role {
 		case llm.RoleUser, llm.RoleAssistant:
+			if message.Role == llm.RoleAssistant {
+				m.usage.add(message.Usage)
+			}
 			entry := messageEntry(message.Message)
 			if message.Role == llm.RoleUser || entry.text != "" || entry.thinking != "" {
 				m.entries = append(m.entries, entry)
@@ -196,6 +200,9 @@ func (m *Model) applyMessageEvent(event agent.Event) {
 	}
 
 	if event.Type == agent.EventMessageEnd {
+		if role == llm.RoleAssistant {
+			m.usage.add(event.Message.Usage)
+		}
 		entry = m.entries[index]
 		if role == llm.RoleAssistant && entry.text == "" && entry.thinking == "" && !entry.failed {
 			m.entries = append(m.entries[:index], m.entries[index+1:]...)

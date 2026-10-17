@@ -75,6 +75,29 @@ type Usage struct {
 	Cost        float64 `json:"cost,omitempty"`
 }
 
+// Total 返回本次响应的总 token 数，provider 未报告 totalTokens 时回退到 input+output。
+func (u Usage) Total() int {
+	if u.TotalTokens > 0 {
+		return u.TotalTokens
+	}
+	return u.Input + u.Output
+}
+
+// IsZero 报告 provider 是否未返回任何用量数据。
+func (u Usage) IsZero() bool {
+	return u == (Usage{})
+}
+
+// Add 把另一次响应的用量累加到当前统计。
+func (u *Usage) Add(other Usage) {
+	u.Input += other.Input
+	u.Output += other.Output
+	u.CacheRead += other.CacheRead
+	u.CacheWrite += other.CacheWrite
+	u.TotalTokens += other.Total()
+	u.Cost += other.Cost
+}
+
 // Message 是窄的 LLM 消息。assistant 消息才填充 Usage/StopReason 等元数据。
 type Message struct {
 	Role       Role       `json:"role"`

@@ -109,12 +109,13 @@ func drainAgent(t *testing.T, m Model, h *harness.Harness, events <-chan agent.E
 }
 
 func TestPromptStreamsToolsAndRenders(t *testing.T) {
-	h := newTestHarness(t, []llm.Message{
-		llm.FauxToolCall("working", &llm.ToolCallContent{
-			ID: "call-1", Name: "bash", Arguments: json.RawMessage(`{"command":"printf tool-output"}`),
-		}),
-		llm.FauxAssistant("done"),
-	}, true, tools.Bash())
+	toolResponse := llm.FauxToolCall("working", &llm.ToolCallContent{
+		ID: "call-1", Name: "bash", Arguments: json.RawMessage(`{"command":"printf tool-output"}`),
+	})
+	toolResponse.Usage = llm.Usage{Input: 100, Output: 20, CacheRead: 40}
+	finalResponse := llm.FauxAssistant("done")
+	finalResponse.Usage = llm.Usage{Input: 130, Output: 30, TotalTokens: 160}
+	h := newTestHarness(t, []llm.Message{toolResponse, finalResponse}, true, tools.Bash())
 	m := New(h)
 	events := make(chan agent.Event, 1024)
 	unsubscribe := h.Agent.Subscribe(func(event agent.Event) { events <- event })
@@ -146,13 +147,64 @@ func TestPromptStreamsToolsAndRenders(t *testing.T) {
 		t.Fatalf("unexpected final assistant entry: %#v", m.entries[3])
 	}
 	view := m.View()
-	for _, want := range []string{"run the tool", "working", "bash", "tool-output", "done"} {
+	for _, want := range []string{"run the tool", "working", "bash", "tool-output", "done", "tokens in 130 out 30 · total 280"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view does not contain %q:\n%s", want, view)
 		}
 	}
 	if got := len(h.Agent.Messages()); got != 4 {
 		t.Fatalf("agent has %d messages, want 4", got)
+	}
+	if m.usage.responses != 2 || m.usage.last != finalResponse.Usage || m.usage.total.Input != 230 || m.usage.total.Output != 50 || m.usage.total.Total() != 280 || m.usage.total.CacheRead != 40 {
+		t.Fatalf("unexpected usage aggregate: %+v", m.usage)
+	}
+
+	m.rebuildTranscript()
+	if m.usage.responses != 2 || m.usage.total.Total() != 280 {
+		t.Fatalf("transcript rebuild duplicated usage: %+v", m.usage)
+	}
+	m, cmd = submitText(t, m, "/usage")
+	if cmd != nil {
+		t.Fatal("/usage returned unexpected async work")
+	}
+	detail := m.entries[len(m.entries)-1].text
+	for _, want := range []string{"最近响应：input 130 · output 30 · total 160", "累计（2 次 assistant 响应）：input 230 · output 50 · total 280 · cacheRead 40"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("/usage detail does not contain %q:\n%s", want, detail)
+		}
+	}
+}
+
+func TestUsageCountsBlankAssistant(t *testing.T) {
+	m := New(newTestHarness(t, nil, false))
+	message := agent.AgentMessage{Message: llm.Message{
+		Role: llm.RoleAssistant,
+		Content: []llm.Content{&llm.ToolCallContent{
+			ID: "usage-call", Name: "read", Arguments: json.RawMessage(`{"path":"go.mod"}`),
+		}},
+		Usage: llm.Usage{Input: 80, Output: 20, CacheWrite: 5},
+	}}
+	m = applyAgentEvent(t, m, agent.Event{Type: agent.EventMessageStart, Message: &message})
+	m = applyAgentEvent(t, m, agent.Event{Type: agent.EventMessageEnd, Message: &message})
+	if len(m.entries) != 0 {
+		t.Fatalf("blank tool-only assistant should not render: %#v", m.entries)
+	}
+	if m.usage.responses != 1 || m.usage.total.Total() != 100 || m.usage.total.CacheWrite != 5 {
+		t.Fatalf("tool-only assistant usage was not counted: %+v", m.usage)
+	}
+}
+
+func TestUsageCommandWithoutData(t *testing.T) {
+	m := New(newTestHarness(t, nil, false))
+	m, cmd := submitText(t, m, "/usage")
+	if cmd != nil {
+		t.Fatal("/usage returned unexpected async work")
+	}
+	if !strings.Contains(m.entries[len(m.entries)-1].text, "暂无 token 用量数据") {
+		t.Fatalf("unexpected empty usage detail: %#v", m.entries[len(m.entries)-1])
+	}
+	if strings.Contains(m.statusView(), "tokens in") {
+		t.Fatalf("empty usage rendered in status: %q", m.statusView())
 	}
 }
 
@@ -338,7 +390,9 @@ func TestBranchAndResumeRebuildTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.Session.AppendMessage(agent.AgentMessage{Message: llm.FauxAssistant("later")}); err != nil {
+	later := llm.FauxAssistant("later")
+	later.Usage = llm.Usage{Input: 50, Output: 10}
+	if _, err := h.Session.AppendMessage(agent.AgentMessage{Message: later}); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.Resume(); err != nil {
@@ -347,6 +401,9 @@ func TestBranchAndResumeRebuildTranscript(t *testing.T) {
 	m := New(h)
 	if len(m.entries) != 2 {
 		t.Fatalf("initial rebuild got %d entries, want 2", len(m.entries))
+	}
+	if m.usage.responses != 1 || m.usage.total.Total() != 60 {
+		t.Fatalf("initial usage rebuild: %+v", m.usage)
 	}
 
 	m, cmd := submitText(t, m, "/branch "+firstID)
@@ -362,6 +419,9 @@ func TestBranchAndResumeRebuildTranscript(t *testing.T) {
 	if strings.Contains(m.entries[0].text, "later") {
 		t.Fatal("abandoned branch message is still visible")
 	}
+	if m.usage.responses != 0 || m.usage.total.Total() != 0 {
+		t.Fatalf("branch retained abandoned usage: %+v", m.usage)
+	}
 
 	m, cmd = submitText(t, m, "/resume")
 	if cmd != nil {
@@ -369,6 +429,9 @@ func TestBranchAndResumeRebuildTranscript(t *testing.T) {
 	}
 	if got := len(h.Agent.Messages()); got != 1 {
 		t.Fatalf("resume restored %d messages, want 1", got)
+	}
+	if m.usage.responses != 0 {
+		t.Fatalf("resume restored abandoned usage: %+v", m.usage)
 	}
 }
 

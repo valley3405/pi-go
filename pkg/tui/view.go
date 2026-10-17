@@ -82,6 +82,9 @@ func (m Model) statusView() string {
 			status += " · no session"
 		}
 	}
+	if usage := m.usage.status(); usage != "" {
+		status += " · " + usage
+	}
 	status += " · trace:" + m.traceMode.String()
 	style := mutedStyle
 	if m.notice != "" && !m.busy {

@@ -52,7 +52,7 @@ pi 区分 `AgentMessage`（宽）与 LLM `Message`（窄）。Go 版同样处理
 
 - `llm.Message`：`role(user/assistant/toolResult)` + `[]Content`。
 - `Content` 用接口 + 具体类型：`TextContent`、`ThinkingContent`、`ToolCallContent`（含 id/name/arguments JSON）、`ImageContent`（base64）。
-- `AssistantMessage` 附带 `Usage`（input/output/cacheRead/cacheWrite + cost）、`StopReason`（`stop/length/toolUse/error/aborted`）。
+- `AssistantMessage` 附带 `Usage`（input/output/cacheRead/cacheWrite/totalTokens + cost）、`StopReason`（`stop/length/toolUse/error/aborted`）。`Usage.Total()` 在 provider 未返回 total 时回退到 input+output，`Add()` 用于跨响应累计。
 - `llm.Tool`：name、description、JSON Schema（`map[string]any` 表示，零依赖）。
 
 ### 3.2 流式事件
@@ -81,7 +81,7 @@ type Provider interface {
 ```
 
 - `Registry`（≈ pi 的 `createModels()`）：注册 provider、按 `provider/model-id` 查模型。
-- 内置 `OpenAIProvider`（兼容 OpenAI / DeepSeek / 各类网关，SSE 流式 + tool_calls 增量合并）与 `AnthropicProvider`（SSE，`content_block_*` 事件映射）。
+- 内置 `OpenAIProvider`（兼容 OpenAI / DeepSeek / 各类网关，SSE 流式 + tool_calls 增量合并）与 `AnthropicProvider`（SSE，`content_block_*` 事件映射）。两者解析流式 usage；OpenAI 支持标准/DeepSeek 缓存字段，Anthropic 支持嵌套 message_start usage 与 cacheRead/cacheWrite。
 - `FauxProvider`：脚本化响应队列，测试整个 agent 循环不需要真实 API key。
 - API key 通过 `opts.APIKey` / `GetAPIKey func(provider string) string` 注入（对应 pi 的 `getApiKey`，支持过期 token 每次调用前重新取）。
 
@@ -200,10 +200,11 @@ type AgentTool interface {
 
 - **TUI 模式（默认）**：Bubble Tea 全屏应用，Bubbles viewport/textarea 分别负责历史滚动与多行输入，Lip Gloss 负责样式和自适应布局。`Agent.Subscribe` 的生命周期事件通过 `Program.Send` 转入 UI 更新循环，assistant 流式内容与并行工具状态按事件归并。
 - **运行轨迹**：thinking 与工具调用/输出带活动状态。`auto` 模式下活动中展开、结束后折叠并保留摘要；`expanded`/`collapsed` 手动控制全部轨迹，Ctrl+O 切换，`/trace auto|expand|collapse` 精确设置。
+- **Token 用量**：assistant message_end 时累计 provider usage，状态栏显示最近 input/output 和当前分支累计 total；`/usage` 展示精确缓存/成本等明细。resume/branch/compact 时从消息重建，避免重复计数。
 - **异步操作**：prompt、compaction 和用户 bash 都作为 `tea.Cmd` 执行；Esc/Ctrl+C 通过 context 与 `Agent.Abort()` 中止。Enter 发送，Alt+Enter 等组合键换行，PgUp/PgDn/鼠标滚轮浏览历史。
 - **REPL 回退**：`goagent -repl` 保留原 stdlib `bufio` 行式界面，适合不需要全屏控制的环境。
 - **print 模式**：`goagent -p "prompt"`，流式输出文本，工具调用打印摘要，退出码反映 stopReason。
-- 会话命令：`/help`、`/skills`、`/branch <id>`、`/compact`、`/trace`、`/tree`、`/resume`、`/quit`；`!cmd` 执行 bash 并在当前界面显示输出，不注入模型上下文。
+- 会话命令：`/help`、`/skills`、`/branch <id>`、`/compact`、`/trace`、`/tree`、`/resume`、`/usage`、`/quit`；`!cmd` 执行 bash 并在当前界面显示输出，不注入模型上下文。
 - 配置：环境变量 `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`GOAGENT_MODEL`、`ANTHROPIC_API_KEY`；会话文件默认 `~/.goagent/sessions/`。
 
 ## 8. 与 pi 的差异（刻意决策）

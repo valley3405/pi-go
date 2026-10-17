@@ -97,9 +97,13 @@ type oaiChunk struct {
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
+		PromptTokens         int `json:"prompt_tokens"`
+		CompletionTokens     int `json:"completion_tokens"`
+		TotalTokens          int `json:"total_tokens"`
+		PromptCacheHitTokens int `json:"prompt_cache_hit_tokens"`
+		PromptTokensDetails  *struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -246,6 +250,10 @@ func consumeOAISSE(r io.Reader, model Model, s *EventStream) error {
 			usage.Input = chunk.Usage.PromptTokens
 			usage.Output = chunk.Usage.CompletionTokens
 			usage.TotalTokens = chunk.Usage.TotalTokens
+			usage.CacheRead = chunk.Usage.PromptCacheHitTokens
+			if chunk.Usage.PromptTokensDetails != nil {
+				usage.CacheRead = chunk.Usage.PromptTokensDetails.CachedTokens
+			}
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -331,6 +339,7 @@ func consumeOAISSE(r io.Reader, model Model, s *EventStream) error {
 	default:
 		partial.StopReason = StopStop
 	}
+	usage.TotalTokens = usage.Total()
 	partial.Usage = usage
 	s.Push(Event{Type: EventDone, Partial: partial})
 	s.Finish(partial, nil)

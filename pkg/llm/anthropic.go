@@ -167,9 +167,19 @@ func (p *AnthropicProvider) stream(ctx context.Context, model Model, c Context, 
 
 // ---- SSE 消费 ----
 
+type antUsage struct {
+	InputTokens         int `json:"input_tokens"`
+	OutputTokens        int `json:"output_tokens"`
+	CacheCreationTokens int `json:"cache_creation_input_tokens"`
+	CacheReadTokens     int `json:"cache_read_input_tokens"`
+}
+
 type antEvent struct {
-	Type  string `json:"type"`
-	Index int    `json:"index"`
+	Type    string `json:"type"`
+	Index   int    `json:"index"`
+	Message struct {
+		Usage *antUsage `json:"usage"`
+	} `json:"message"`
 	Delta struct {
 		Type        string `json:"type"`
 		Text        string `json:"text"`
@@ -182,10 +192,7 @@ type antEvent struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"content_block"`
-	Usage *struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
+	Usage *antUsage `json:"usage"`
 }
 
 func consumeAntSSE(r io.Reader, s *EventStream) error {
@@ -217,8 +224,14 @@ func consumeAntSSE(r io.Reader, s *EventStream) error {
 		}
 		switch ev.Type {
 		case "message_start":
-			if ev.Usage != nil {
-				usage.Input = ev.Usage.InputTokens
+			eventUsage := ev.Message.Usage
+			if eventUsage == nil {
+				eventUsage = ev.Usage
+			}
+			if eventUsage != nil {
+				usage.Input = eventUsage.InputTokens
+				usage.CacheRead = eventUsage.CacheReadTokens
+				usage.CacheWrite = eventUsage.CacheCreationTokens
 			}
 		case "content_block_start":
 			b := &block{kind: ev.ContentBlock.Type, id: ev.ContentBlock.ID, name: ev.ContentBlock.Name}
@@ -275,6 +288,12 @@ func consumeAntSSE(r io.Reader, s *EventStream) error {
 			}
 			if ev.Usage != nil {
 				usage.Output = ev.Usage.OutputTokens
+				if ev.Usage.CacheReadTokens != 0 {
+					usage.CacheRead = ev.Usage.CacheReadTokens
+				}
+				if ev.Usage.CacheCreationTokens != 0 {
+					usage.CacheWrite = ev.Usage.CacheCreationTokens
+				}
 			}
 		}
 	}
@@ -290,7 +309,7 @@ func consumeAntSSE(r io.Reader, s *EventStream) error {
 	default:
 		partial.StopReason = StopStop
 	}
-	usage.TotalTokens = usage.Input + usage.Output
+	usage.TotalTokens = usage.Input + usage.Output + usage.CacheRead + usage.CacheWrite
 	partial.Usage = usage
 	s.Push(Event{Type: EventDone, Partial: partial})
 	s.Finish(partial, nil)

@@ -120,6 +120,7 @@ type Model struct {
 	activity     string
 	notice       string
 	traceMode    traceMode
+	usage        usageStats
 }
 
 // New creates a TUI model backed by h.
@@ -340,6 +341,8 @@ func (m Model) executeSlashCommand(text string) (tea.Model, tea.Cmd) {
 		m.appendSystem(m.skillsText(), false)
 	case "/tree":
 		m.appendSystem(m.treeText(), false)
+	case "/usage":
+		m.appendSystem(m.usage.detail(), false)
 	case "/branch":
 		if len(fields) != 2 {
 			m.appendSystem("用法：/branch <entry-id>", true)
@@ -466,6 +469,7 @@ const helpText = `可用命令：
   /help             显示帮助
   /skills           查看已加载 skills
   /tree             查看当前 session 分支
+  /usage            查看最近及累计 token 用量
   /branch <id>      从历史 entry 创建分支
   /compact          压缩当前上下文
   /trace <mode>     运行轨迹：auto / expand / collapse（Ctrl+O 手动切换）
