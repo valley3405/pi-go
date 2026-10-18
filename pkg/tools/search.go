@@ -17,7 +17,8 @@ import (
 // LS 列目录（对应 pi 的 ls 工具）。
 func LS() agent.AgentTool {
 	return &lsTool{baseTool{
-		name: "ls",
+		name:     "ls",
+		readOnly: true,
 		tool: llm.Tool{
 			Name:        "ls",
 			Description: "List directory contents with type markers (dir/file) and sizes.",
@@ -60,7 +61,8 @@ func (t *lsTool) Execute(ctx context.Context, callID string, args json.RawMessag
 // Grep 在目录里做正则搜索（对应 pi 的 grep 工具），尊重简化的 ignore 规则。
 func Grep() agent.AgentTool {
 	return &grepTool{baseTool{
-		name: "grep",
+		name:     "grep",
+		readOnly: true,
 		tool: llm.Tool{
 			Name:        "grep",
 			Description: "Search file contents with a regex pattern. Returns matching lines with file:line prefix.",

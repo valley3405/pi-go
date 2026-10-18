@@ -1,0 +1,73 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"strings"
+	"testing"
+
+	"goagent/pkg/permission"
+)
+
+func TestRuleList(t *testing.T) {
+	var rules ruleList
+	if err := rules.Set("bash, read"); err != nil {
+		t.Fatal(err)
+	}
+	if err := rules.Set("write"); err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 3 || rules[0] != "bash" || rules[1] != "read" || rules[2] != "write" {
+		t.Fatalf("unexpected rules: %v", rules)
+	}
+}
+
+func TestNewPermissionPolicy(t *testing.T) {
+	policy, err := newPermissionPolicy("acceptEdits", false, []string{"read"}, []string{"bash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.Mode != permission.ModeAcceptEdits || len(policy.AllowedTools) != 1 || len(policy.DisallowedTools) != 1 {
+		t.Fatalf("unexpected policy: %+v", policy)
+	}
+	policy, err = newPermissionPolicy("plan", true, nil, []string{"bash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.Mode != permission.ModeBypass {
+		t.Fatalf("-yes mode=%q, want bypass", policy.Mode)
+	}
+	if decision := policy.Evaluate(context.Background(), permission.Request{ToolName: "bash"}); decision.Behavior != permission.Deny {
+		t.Fatalf("deny rule should beat -yes: %+v", decision)
+	}
+	if _, err := newPermissionPolicy("invalid", false, nil, nil); err == nil {
+		t.Fatal("expected invalid mode error")
+	}
+}
+
+func TestTerminalApprover(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected permission.Behavior
+	}{
+		{input: "y\n", expected: permission.Allow},
+		{input: "YES\n", expected: permission.Allow},
+		{input: "n\n", expected: permission.Deny},
+		{input: "\n", expected: permission.Deny},
+		{input: "", expected: permission.Deny},
+	}
+	for _, tt := range tests {
+		approver := terminalApprover(bufio.NewReader(strings.NewReader(tt.input)))
+		decision := approver(context.Background(), permission.Request{ToolName: "bash"})
+		if decision.Behavior != tt.expected {
+			t.Errorf("input %q: behavior=%q, want %q", tt.input, decision.Behavior, tt.expected)
+		}
+	}
+}
+
+func TestNonInteractiveApprover(t *testing.T) {
+	decision := nonInteractiveApprover(context.Background(), permission.Request{ToolName: "write"})
+	if decision.Behavior != permission.Deny || !strings.Contains(decision.Reason, "-yes") {
+		t.Fatalf("unexpected print-mode decision: %+v", decision)
+	}
+}

@@ -95,6 +95,9 @@ func (m Model) statusView() string {
 
 func (m Model) helpView() string {
 	help := "Enter 发送 · Alt+Enter 换行 · Ctrl+O 轨迹 · PgUp/PgDn 滚动 · Esc/Ctrl+C 中止/退出"
+	if len(m.approvals) > 0 {
+		help = "y 允许 · n 拒绝 · Esc/Ctrl+C 中止"
+	}
 	return mutedStyle.MaxWidth(m.width).Render(help)
 }
 

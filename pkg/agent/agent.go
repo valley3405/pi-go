@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"goagent/pkg/llm"
+	"goagent/pkg/permission"
 )
 
 // pendingMessageQueue 对应 pi 的 PendingMessageQueue。
@@ -71,6 +72,7 @@ type Agent struct {
 	tools      []AgentTool
 	streamFn   llm.StreamFn
 	streamOpts llm.StreamOptions
+	permission permission.Evaluator
 
 	// 可替换管线（对应 pi 的公开字段）
 	ConvertToLLM     func([]AgentMessage) ([]llm.Message, error)
@@ -104,6 +106,8 @@ type Options struct {
 	StreamOptions llm.StreamOptions
 	SteeringMode  QueueMode
 	FollowUpMode  QueueMode
+	// Permission 为 nil 时不启用权限评估，保持库嵌入的原有行为。
+	Permission permission.Evaluator
 }
 
 // New 创建 Agent。
@@ -119,6 +123,7 @@ func New(opts Options) *Agent {
 		tools:         opts.Tools,
 		streamFn:      opts.StreamFn,
 		streamOpts:    opts.StreamOptions,
+		permission:    opts.Permission,
 		steeringQueue: &pendingMessageQueue{Mode: opts.SteeringMode},
 		followUpQueue: &pendingMessageQueue{Mode: opts.FollowUpMode},
 		ToolExecution: ExecutionParallel,
@@ -347,6 +352,7 @@ func (a *Agent) buildLoopConfig() loopConfig {
 	return loopConfig{
 		model:          a.state.Model,
 		toolExecution:  a.ToolExecution,
+		permission:     a.permission,
 		convertToLLM:   a.ConvertToLLM,
 		transformCtx:   a.TransformContext,
 		beforeToolCall: a.BeforeToolCall,

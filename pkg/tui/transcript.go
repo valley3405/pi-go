@@ -109,6 +109,7 @@ func (m *Model) applyAgentEvent(event agent.Event) {
 		m.activity = "正在等待模型响应…"
 		m.notice = ""
 	case agent.EventAgentEnd:
+		m.rejectApprovals("agent stopped")
 		m.busy = false
 		m.activity = ""
 		m.notice = ""

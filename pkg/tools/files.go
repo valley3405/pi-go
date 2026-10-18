@@ -16,7 +16,8 @@ import (
 // Read 读取文件内容（offset/limit + 行号前缀，对应 pi 的 read 工具）。
 func Read() agent.AgentTool {
 	return &readTool{baseTool{
-		name: "read",
+		name:     "read",
+		readOnly: true,
 		tool: llm.Tool{
 			Name:        "read",
 			Description: "Read a file with line numbers. Use offset/limit for large files.",

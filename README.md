@@ -11,6 +11,7 @@ pkg/llm       统一多供应商 LLM 层：消息模型、流式事件流、Prov
               （OpenAI 兼容 / Anthropic / 测试用 FauxProvider）
 pkg/agent     Agent 运行时：双层循环、steering/follow-up 双队列、
               生命周期事件、工具三段管线（prepare/execute/finalize）
+pkg/permission 独立权限层：权限模式、allow/deny 规则、交互审批与 deny 优先
 pkg/harness   append-only JSONL 树状会话、分支、上下文压缩、
               skills 发现与注入（SKILL.md + frontmatter，gitignore 感知）
 pkg/tools     内置编码工具：bash / read / write / edit / ls / grep
@@ -55,6 +56,27 @@ go run ./cmd/goagent
 # 行式 REPL 回退模式
 go run ./cmd/goagent -repl
 ```
+
+## Permissions
+
+默认 CLI 启用权限控制：`read` / `ls` / `grep` 自动允许，`write` / `edit` / `bash` 默认需要审批。TUI 中按 `y` 允许、`n` 拒绝；REPL 中直接回答提示。可用模式：
+
+- `default`：只读工具自动允许，其他工具按规则或审批结果执行。
+- `acceptEdits`：额外自动允许 `write` / `edit`。
+- `plan`：仅允许只读工具。
+- `dontAsk`：不发起审批，只允许只读工具和 allow 规则命中的工具。
+- `bypass`：除 deny 规则外全部允许；`-yes` 是此模式的简写。
+
+```bash
+go run ./cmd/goagent -permission acceptEdits
+go run ./cmd/goagent -allow bash
+go run ./cmd/goagent -yes -deny bash   # deny 始终优先
+go run ./cmd/goagent -yes -p "修改文件并运行测试"
+```
+
+`-allow` / `-deny` 支持重复传入或逗号分隔，规则为精确工具名或 `*`。print 模式不会隐式等待 stdin；需要写文件或执行 Bash 时，必须通过 `-yes`、`-allow` 或相应权限模式显式放权。
+
+作为库嵌入时，`agent.Options.Permission` 为 nil 表示不启用权限评估，保持原有行为；传入 `permission.Policy` 或自定义 `permission.Evaluator` 即可启用。权限系统不等于容器沙箱。
 
 ## Skills
 
@@ -116,4 +138,4 @@ a.WaitForIdle()
 ## 路线图
 
 - RPC/server 模式（pi 的 protocol/server/client 层）
-- 工具权限与容器化运行指引
+- 容器化运行指引（权限系统不等于 sandbox）

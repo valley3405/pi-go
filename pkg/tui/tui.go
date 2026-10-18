@@ -16,6 +16,7 @@ import (
 
 	"goagent/pkg/agent"
 	"goagent/pkg/harness"
+	"goagent/pkg/permission"
 	"goagent/pkg/tools"
 )
 
@@ -84,6 +85,11 @@ type bashDoneMsg struct {
 	failed bool
 }
 
+type approvalRequestMsg struct {
+	request  permission.Request
+	response chan permission.Decision
+}
+
 type traceMode uint8
 
 const (
@@ -121,6 +127,7 @@ type Model struct {
 	notice       string
 	traceMode    traceMode
 	usage        usageStats
+	approvals    []approvalRequestMsg
 }
 
 // New creates a TUI model backed by h.
@@ -155,12 +162,32 @@ func New(h *harness.Harness) Model {
 }
 
 // Run starts the full-screen TUI until the user quits.
-func Run(h *harness.Harness) error {
+func Run(h *harness.Harness) error { return run(h, nil) }
+
+// RunWithPolicy starts the TUI and routes permission approvals through it.
+func RunWithPolicy(h *harness.Harness, policy *permission.Policy) error { return run(h, policy) }
+
+func run(h *harness.Harness, policy *permission.Policy) error {
 	if h == nil || h.Agent == nil {
 		return errors.New("tui requires an agent harness")
 	}
 	m := New(h)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	if policy != nil {
+		policy.Approver = func(ctx context.Context, req permission.Request) permission.Decision {
+			if ctx.Err() != nil {
+				return permission.Denied("operation aborted")
+			}
+			response := make(chan permission.Decision, 1)
+			p.Send(approvalRequestMsg{request: req, response: response})
+			select {
+			case decision := <-response:
+				return decision
+			case <-ctx.Done():
+				return permission.Denied("operation aborted")
+			}
+		}
+	}
 	unsubscribe := h.Agent.Subscribe(func(ev agent.Event) {
 		p.Send(agentEventMsg{event: ev})
 	})
@@ -186,6 +213,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		follow := m.viewport.AtBottom()
 		m.resize(msg.Width, msg.Height)
 		m.refreshTranscript(follow)
+		return m, nil
+
+	case approvalRequestMsg:
+		m.approvals = append(m.approvals, msg)
+		m.updateApprovalNotice()
 		return m, nil
 
 	case agentEventMsg:
@@ -243,6 +275,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.KeyMsg:
+		if len(m.approvals) > 0 {
+			switch msg.String() {
+			case "y", "Y":
+				m.resolveApproval(permission.Allowed())
+			case "n", "N":
+				m.resolveApproval(permission.Denied("denied by user"))
+			case "esc", "ctrl+c":
+				m.abortCurrent()
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "ctrl+c":
 			if m.busy {
@@ -288,7 +331,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *Model) resolveApproval(decision permission.Decision) {
+	if len(m.approvals) == 0 {
+		return
+	}
+	request := m.approvals[0]
+	select {
+	case request.response <- decision:
+	default:
+	}
+	m.approvals = m.approvals[1:]
+	m.updateApprovalNotice()
+}
+
+func (m *Model) rejectApprovals(reason string) {
+	for _, request := range m.approvals {
+		select {
+		case request.response <- permission.Denied(reason):
+		default:
+		}
+	}
+	m.approvals = nil
+	m.updateApprovalNotice()
+}
+
+func (m *Model) updateApprovalNotice() {
+	if len(m.approvals) == 0 {
+		m.notice = ""
+		return
+	}
+	request := m.approvals[0]
+	m.notice = fmt.Sprintf("等待审批 1/%d：%s %s · y 允许 / n 拒绝", len(m.approvals), request.request.ToolName, singleLine(string(request.request.Args), 120))
+}
+
 func (m *Model) abortCurrent() {
+	m.rejectApprovals("operation aborted")
 	m.runtime.cancelCurrent()
 	m.harness.Agent.Abort()
 	m.notice = "正在中止当前任务…"

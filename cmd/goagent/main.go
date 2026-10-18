@@ -33,16 +33,22 @@ Guidelines:
 
 func main() {
 	var (
-		prompt      = flag.String("p", "", "print mode: run once with this prompt and exit")
-		providerID  = flag.String("provider", envOr("GOAGENT_PROVIDER", ""), "provider id: openai-compatible | anthropic")
-		modelID     = flag.String("model", envOr("GOAGENT_MODEL", ""), "model id, e.g. gpt-4o-mini or claude-sonnet-4-5")
-		baseURL     = flag.String("base-url", envOr("OPENAI_BASE_URL", "https://api.openai.com/v1"), "base URL for openai-compatible provider")
-		sessionDir  = flag.String("session-dir", defaultSessionDir(), "directory for session files")
-		noSession   = flag.Bool("no-session", false, "disable session persistence")
-		contextSize = flag.Int("context", 128000, "context window size for auto-compaction (0 = off)")
-		repl        = flag.Bool("repl", false, "use the line-oriented REPL instead of the TUI")
-		showVersion = flag.Bool("version", false, "print version and exit")
+		prompt         = flag.String("p", "", "print mode: run once with this prompt and exit")
+		providerID     = flag.String("provider", envOr("GOAGENT_PROVIDER", ""), "provider id: openai-compatible | anthropic")
+		modelID        = flag.String("model", envOr("GOAGENT_MODEL", ""), "model id, e.g. gpt-4o-mini or claude-sonnet-4-5")
+		baseURL        = flag.String("base-url", envOr("OPENAI_BASE_URL", "https://api.openai.com/v1"), "base URL for openai-compatible provider")
+		sessionDir     = flag.String("session-dir", defaultSessionDir(), "directory for session files")
+		noSession      = flag.Bool("no-session", false, "disable session persistence")
+		contextSize    = flag.Int("context", 128000, "context window size for auto-compaction (0 = off)")
+		permissionMode = flag.String("permission", "default", "permission mode: default | acceptEdits | plan | dontAsk | bypass")
+		yes            = flag.Bool("yes", false, "auto-approve tools (deny rules still apply)")
+		repl           = flag.Bool("repl", false, "use the line-oriented REPL instead of the TUI")
+		showVersion    = flag.Bool("version", false, "print version and exit")
+		allowedTools   ruleList
+		deniedTools    ruleList
 	)
+	flag.Var(&allowedTools, "allow", "allow a tool name (repeatable or comma-separated)")
+	flag.Var(&deniedTools, "deny", "deny a tool name (repeatable or comma-separated; highest priority)")
 	flag.Parse()
 
 	if *showVersion {
@@ -55,12 +61,18 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(2)
 	}
+	policy, err := newPermissionPolicy(*permissionMode, *yes, allowedTools, deniedTools)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(2)
+	}
 
 	a := agent.New(agent.Options{
 		SystemPrompt: systemPrompt,
 		Model:        model,
 		Tools:        tools.CodingTools(),
 		StreamFn:     registry.StreamSimple,
+		Permission:   policy,
 	})
 	a.GetAPIKey = resolveAPIKey
 
@@ -96,13 +108,16 @@ func main() {
 	}()
 
 	if *prompt != "" {
+		policy.Approver = nonInteractiveApprover
 		os.Exit(runPrint(h, *prompt))
 	}
 	if *repl {
-		runInteractive(h)
+		reader := bufio.NewReader(os.Stdin)
+		policy.Approver = terminalApprover(reader)
+		runInteractive(h, reader)
 		return
 	}
-	if err := tui.Run(h); err != nil {
+	if err := tui.RunWithPolicy(h, policy); err != nil {
 		fmt.Fprintln(os.Stderr, "error: run tui:", err)
 		os.Exit(1)
 	}
@@ -213,7 +228,7 @@ func printSubscriber(showThinking bool) func(agent.Event) {
 
 // ---- interactive 模式（行式 REPL）----
 
-func runInteractive(h *harness.Harness) {
+func runInteractive(h *harness.Harness, reader *bufio.Reader) {
 	fmt.Println("goagent interactive. Commands: /skills /branch <id> /tree /compact /resume /quit; !cmd runs bash directly.")
 	if h.Session != nil {
 		fmt.Println("session:", h.Session.Path())
@@ -222,15 +237,14 @@ func runInteractive(h *harness.Harness) {
 	unsub := h.Agent.Subscribe(printSubscriber(false))
 	defer unsub()
 
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
 	for {
 		fmt.Print("\nyou> ")
-		if !scanner.Scan() {
+		line, err := reader.ReadString('\n')
+		if err != nil {
 			fmt.Println()
 			return
 		}
-		line := strings.TrimSpace(scanner.Text())
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}

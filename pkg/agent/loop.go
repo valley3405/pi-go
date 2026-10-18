@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"goagent/pkg/llm"
+	"goagent/pkg/permission"
 )
 
 // eventSink 是循环内部的事件出口。
@@ -304,9 +305,15 @@ func executeSequential(ctx context.Context, curCtx *Context, msg AgentMessage, t
 		if err := emit(Event{Type: EventToolExecutionStart, ToolCallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments}); err != nil {
 			return batch, err
 		}
-		fin, err := runOneToolCall(ctx, curCtx, msg, tc, cfg, emit)
-		if err != nil {
-			return batch, err
+		var fin finalizedCall
+		var err error
+		if ctx.Err() != nil {
+			fin = finalizedCall{result: ErrorToolResult("Operation aborted"), isError: true}
+		} else {
+			fin, err = runOneToolCall(ctx, curCtx, msg, tc, cfg, emit)
+			if err != nil {
+				return batch, err
+			}
 		}
 		finals = append(finals, fin)
 		if err := emit(Event{Type: EventToolExecutionEnd, ToolCallID: tc.ID, ToolName: tc.Name, Result: &fin.result, IsError: fin.isError}); err != nil {
@@ -317,9 +324,6 @@ func executeSequential(ctx context.Context, curCtx *Context, msg AgentMessage, t
 			return batch, err
 		}
 		batch.messages = append(batch.messages, tr)
-		if ctx.Err() != nil {
-			break
-		}
 	}
 	batch.terminate = shouldTerminate(finals)
 	return batch, nil
@@ -365,13 +369,33 @@ type finalizedCall struct {
 
 // runOneToolCall 完成 prepare → execute → finalize 三段。
 func runOneToolCall(ctx context.Context, curCtx *Context, msg AgentMessage, tc *llm.ToolCallContent, cfg loopConfig, emit eventSink) (finalizedCall, error) {
-	// prepare：查工具 + 校验参数 + beforeToolCall 钩子
+	// prepare：查工具 + 校验参数 + 权限评估 + beforeToolCall 钩子
 	tool := findTool(curCtx.Tools, tc.Name)
 	if tool == nil {
 		return finalizedCall{result: ErrorToolResult("Tool " + tc.Name + " not found"), isError: true}, nil
 	}
 	if err := llm.ValidateToolArguments(tool.Schema(), tc.Arguments); err != nil {
 		return finalizedCall{result: ErrorToolResult(err.Error()), isError: true}, nil
+	}
+	if ctx.Err() != nil {
+		return finalizedCall{result: ErrorToolResult("Operation aborted"), isError: true}, nil
+	}
+	if cfg.permission != nil {
+		req := permission.Request{ToolName: tc.Name, Args: tc.Arguments, ToolDecision: permission.AskUser("approve " + tc.Name + "?")}
+		if t, ok := tool.(ReadOnlyTool); ok {
+			req.ReadOnly = t.IsReadOnly(tc.Arguments)
+		}
+		if t, ok := tool.(PermissionCheckedTool); ok {
+			req.ToolDecision = t.CheckPermissions(ctx, tc.Arguments)
+		}
+		decision := cfg.permission.Evaluate(ctx, req)
+		if decision.Behavior != permission.Allow {
+			reason := decision.Reason
+			if reason == "" {
+				reason = "permission denied"
+			}
+			return finalizedCall{result: ErrorToolResult("Tool call was not permitted: " + reason), isError: true}, nil
+		}
 	}
 	if cfg.beforeToolCall != nil {
 		before, err := cfg.beforeToolCall(ctx, BeforeToolCallContext{

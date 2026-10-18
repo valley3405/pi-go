@@ -11,6 +11,7 @@ import (
 
 	"goagent/pkg/agent"
 	"goagent/pkg/llm"
+	"goagent/pkg/permission"
 )
 
 // FileMutationQueue 串行化文件写操作（对应 pi 的 file-mutation-queue）。
@@ -19,9 +20,10 @@ var FileMutationQueue sync.Mutex
 
 // baseTool 提供公共字段。
 type baseTool struct {
-	name string
-	tool llm.Tool
-	mode agent.ExecutionMode
+	name     string
+	tool     llm.Tool
+	mode     agent.ExecutionMode
+	readOnly bool
 }
 
 func (b *baseTool) Name() string     { return b.name }
@@ -31,6 +33,13 @@ func (b *baseTool) ExecutionMode() agent.ExecutionMode {
 		return agent.ExecutionParallel
 	}
 	return b.mode
+}
+func (b *baseTool) IsReadOnly(json.RawMessage) bool { return b.readOnly }
+func (b *baseTool) CheckPermissions(context.Context, json.RawMessage) permission.Decision {
+	if b.readOnly {
+		return permission.Allowed()
+	}
+	return permission.AskUser("approve " + b.name + "?")
 }
 
 func textResult(s string) agent.ToolResult {
@@ -72,5 +81,3 @@ func CodingTools() []agent.AgentTool {
 func ReadOnlyTools() []agent.AgentTool {
 	return []agent.AgentTool{Read(), LS(), Grep()}
 }
-
-var _ = context.Background // 保持导入稳定

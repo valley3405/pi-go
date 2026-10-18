@@ -14,6 +14,7 @@ import (
 	"goagent/pkg/agent"
 	"goagent/pkg/harness"
 	"goagent/pkg/llm"
+	"goagent/pkg/permission"
 	"goagent/pkg/tools"
 )
 
@@ -583,4 +584,60 @@ func TestRuntimeCancelDoesNotLeakIntoNextPrompt(t *testing.T) {
 	if err := ctx.Err(); err != context.Canceled {
 		t.Fatalf("finished context has error %v, want context.Canceled", err)
 	}
+}
+
+func TestApprovalQueueAllowAndDeny(t *testing.T) {
+	m := New(newTestHarness(t, nil, false))
+	m.busy = true
+	first := approvalRequestMsg{
+		request:  permission.Request{ToolName: "bash", Args: json.RawMessage(`{"command":"make test"}`)},
+		response: make(chan permission.Decision, 1),
+	}
+	second := approvalRequestMsg{
+		request:  permission.Request{ToolName: "write", Args: json.RawMessage(`{"path":"a.txt"}`)},
+		response: make(chan permission.Decision, 1),
+	}
+	m, _ = updateModel(t, m, first)
+	m, _ = updateModel(t, m, second)
+	if len(m.approvals) != 2 || !strings.Contains(m.statusView(), "1/2") || !strings.Contains(m.statusView(), "bash") {
+		t.Fatalf("approval queue not rendered: %#v %q", m.approvals, m.statusView())
+	}
+	if !strings.Contains(m.helpView(), "y 允许") {
+		t.Fatalf("approval help missing: %q", m.helpView())
+	}
+
+	m, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if decision := <-first.response; decision.Behavior != permission.Allow {
+		t.Fatalf("first approval decision: %+v", decision)
+	}
+	if len(m.approvals) != 1 || !strings.Contains(m.statusView(), "write") {
+		t.Fatalf("second approval not activated: %#v %q", m.approvals, m.statusView())
+	}
+
+	m, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if decision := <-second.response; decision.Behavior != permission.Deny {
+		t.Fatalf("second approval decision: %+v", decision)
+	}
+	if len(m.approvals) != 0 || m.notice != "" {
+		t.Fatalf("approval queue not drained: %#v notice=%q", m.approvals, m.notice)
+	}
+}
+
+func TestAbortRejectsPendingApproval(t *testing.T) {
+	m := New(newTestHarness(t, nil, false))
+	ctx, done := m.runtime.begin()
+	m.busy = true
+	request := approvalRequestMsg{
+		request:  permission.Request{ToolName: "bash"},
+		response: make(chan permission.Decision, 1),
+	}
+	m, _ = updateModel(t, m, request)
+	m, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if decision := <-request.response; decision.Behavior != permission.Deny {
+		t.Fatalf("abort decision: %+v", decision)
+	}
+	if len(m.approvals) != 0 || ctx.Err() == nil || !strings.Contains(m.notice, "正在中止") {
+		t.Fatalf("abort did not clean approval state: approvals=%v ctx=%v notice=%q", m.approvals, ctx.Err(), m.notice)
+	}
+	done()
 }

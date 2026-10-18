@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"goagent/pkg/llm"
+	"goagent/pkg/permission"
 )
 
 // AgentMessage 比 llm.Message 宽：允许携带 LLM 不认识的自定义/UI 消息
@@ -63,6 +64,16 @@ type AgentTool interface {
 	// Execute 执行工具。onUpdate 可回调流式 partial result
 	// （对应 pi 的 tool_execution_update）。
 	Execute(ctx context.Context, callID string, args json.RawMessage, onUpdate func(ToolResult)) (ToolResult, error)
+}
+
+// ReadOnlyTool 是可选接口；未实现时工具按非只读处理。
+type ReadOnlyTool interface {
+	IsReadOnly(args json.RawMessage) bool
+}
+
+// PermissionCheckedTool 是可选的工具权限自检接口。
+type PermissionCheckedTool interface {
+	CheckPermissions(ctx context.Context, args json.RawMessage) permission.Decision
 }
 
 // ---- 生命周期事件（对应 pi 的 AgentEvent）----
@@ -163,6 +174,7 @@ type Context struct {
 type loopConfig struct {
 	model          llm.Model
 	toolExecution  ExecutionMode
+	permission     permission.Evaluator
 	convertToLLM   func([]AgentMessage) ([]llm.Message, error)
 	transformCtx   func(context.Context, []AgentMessage) ([]AgentMessage, error)
 	beforeToolCall func(context.Context, BeforeToolCallContext) (*BeforeToolCallResult, error)

@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"goagent/pkg/agent"
 	"goagent/pkg/llm"
+	"goagent/pkg/permission"
 )
 
 // echoTool 是一个测试工具：原样返回 args 里的 text。
@@ -404,5 +406,112 @@ func TestCanceledHookEmitsAgentEnd(t *testing.T) {
 	messages := a.Messages()
 	if len(messages) != 2 || messages[1].StopReason != llm.StopAborted {
 		t.Fatalf("canceled run final message missing: %#v", messages)
+	}
+}
+
+func newPermissionedAgent(script []llm.Message, evaluator permission.Evaluator, toolList ...agent.AgentTool) (*agent.Agent, *llm.FauxProvider) {
+	faux := llm.NewFauxProvider("faux", script, 4)
+	reg := llm.NewRegistry()
+	reg.SetProvider(faux)
+	model, _ := reg.GetModel("faux", "faux-1")
+	a := agent.New(agent.Options{
+		SystemPrompt: "test",
+		Model:        model,
+		Tools:        toolList,
+		StreamFn:     reg.StreamSimple,
+		Permission:   evaluator,
+	})
+	return a, faux
+}
+
+func TestPermissionDeniedBeforeHook(t *testing.T) {
+	var calls, hookCalls int32
+	tool := &echoTool{calls: &calls}
+	a, _ := newPermissionedAgent([]llm.Message{
+		llm.FauxToolCall("", &llm.ToolCallContent{ID: "c1", Name: "echo", Arguments: json.RawMessage(`{"text":"a"}`)}),
+		llm.FauxAssistant("denied"),
+	}, &permission.Policy{Mode: permission.ModeDontAsk}, tool)
+	a.BeforeToolCall = func(ctx context.Context, c agent.BeforeToolCallContext) (*agent.BeforeToolCallResult, error) {
+		atomic.AddInt32(&hookCalls, 1)
+		return nil, nil
+	}
+
+	if err := a.Prompt(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	a.WaitForIdle()
+	if calls != 0 || hookCalls != 0 {
+		t.Fatalf("denied tool reached hook/execute: calls=%d hooks=%d", calls, hookCalls)
+	}
+	msgs := a.Messages()
+	if len(msgs) < 3 || msgs[2].Role != llm.RoleToolResult || !msgs[2].IsError || !strings.Contains(msgs[2].Text(), "not permitted") {
+		t.Fatalf("missing permission denial tool result: %#v", msgs)
+	}
+}
+
+type readOnlyEchoTool struct{ echoTool }
+
+func (t *readOnlyEchoTool) IsReadOnly(json.RawMessage) bool { return true }
+
+func TestPermissionAllowsReadOnlyTool(t *testing.T) {
+	var calls int32
+	tool := &readOnlyEchoTool{echoTool{calls: &calls}}
+	a, _ := newPermissionedAgent([]llm.Message{
+		llm.FauxToolCall("", &llm.ToolCallContent{ID: "c1", Name: "echo", Arguments: json.RawMessage(`{"text":"safe"}`)}),
+		llm.FauxAssistant("done"),
+	}, &permission.Policy{}, tool)
+
+	if err := a.Prompt(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	a.WaitForIdle()
+	if calls != 1 {
+		t.Fatalf("read-only tool calls=%d, want 1", calls)
+	}
+}
+
+func TestAbortDuringApprovalCompletesToolResults(t *testing.T) {
+	var calls int32
+	tool := &echoTool{calls: &calls}
+	approvalStarted := make(chan struct{})
+	policy := &permission.Policy{Approver: func(ctx context.Context, req permission.Request) permission.Decision {
+		close(approvalStarted)
+		<-ctx.Done()
+		return permission.Denied("approval aborted")
+	}}
+	a, _ := newPermissionedAgent([]llm.Message{
+		llm.FauxToolCall("",
+			&llm.ToolCallContent{ID: "c1", Name: "echo", Arguments: json.RawMessage(`{"text":"a"}`)},
+			&llm.ToolCallContent{ID: "c2", Name: "echo", Arguments: json.RawMessage(`{"text":"b"}`)},
+		),
+		llm.FauxAssistant("done"),
+	}, policy, tool)
+	a.ToolExecution = agent.ExecutionSequential
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := a.Prompt(ctx, "x"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-approvalStarted:
+		cancel()
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("timed out waiting for approval")
+	}
+	a.WaitForIdle()
+	if calls != 0 {
+		t.Fatalf("aborted tool executed %d times", calls)
+	}
+	var resultIDs []string
+	for _, msg := range a.Messages() {
+		if msg.Role == llm.RoleToolResult {
+			if !msg.IsError {
+				t.Fatalf("aborted result is not an error: %#v", msg)
+			}
+			resultIDs = append(resultIDs, msg.ToolCallID)
+		}
+	}
+	if len(resultIDs) != 2 || resultIDs[0] != "c1" || resultIDs[1] != "c2" {
+		t.Fatalf("tool results not paired after abort: %v", resultIDs)
 	}
 }

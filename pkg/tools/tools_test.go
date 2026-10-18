@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"goagent/pkg/llm"
+	"goagent/pkg/permission"
 	"goagent/pkg/tools"
 )
 
@@ -122,5 +123,37 @@ func TestLS(t *testing.T) {
 	out := res.Content[0].(*llm.TextContent).Text
 	if !strings.Contains(out, "d d1/") || !strings.Contains(out, "f f1") {
 		t.Fatalf("unexpected ls output:\n%s", out)
+	}
+}
+
+func TestCodingToolsPermissionMetadata(t *testing.T) {
+	readOnly := map[string]bool{"read": true, "ls": true, "grep": true}
+	for _, tool := range tools.CodingTools() {
+		readOnlyTool, ok := tool.(interface {
+			IsReadOnly(json.RawMessage) bool
+		})
+		if !ok {
+			t.Errorf("%s does not expose read-only metadata", tool.Name())
+			continue
+		}
+		checkedTool, ok := tool.(interface {
+			CheckPermissions(context.Context, json.RawMessage) permission.Decision
+		})
+		if !ok {
+			t.Errorf("%s does not expose permission metadata", tool.Name())
+			continue
+		}
+		expected := readOnly[tool.Name()]
+		if actual := readOnlyTool.IsReadOnly(json.RawMessage(`{}`)); actual != expected {
+			t.Errorf("%s readOnly=%v, want %v", tool.Name(), actual, expected)
+		}
+		decision := checkedTool.CheckPermissions(context.Background(), json.RawMessage(`{}`))
+		expectedBehavior := permission.Ask
+		if expected {
+			expectedBehavior = permission.Allow
+		}
+		if decision.Behavior != expectedBehavior {
+			t.Errorf("%s permission behavior=%q, want %q", tool.Name(), decision.Behavior, expectedBehavior)
+		}
 	}
 }

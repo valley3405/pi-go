@@ -33,6 +33,8 @@ pi 的核心思想：**分层解耦 + 事件驱动 + 最小内核**。goagent �
 │  └─ loop             runLoop：外层 follow-up /     │
 │                      内层 tool-call 循环           │
 ├──────────────────────────────────────────────────┤
+│ pkg/permission     权限模式、规则与宿主审批           │
+├──────────────────────────────────────────────────┤
 │ pkg/llm            Provider 抽象 + 流式事件流       │
 │  ├─ Provider 接口    OpenAI 兼容 / Anthropic       │
 │  ├─ EventStream      channel 化的事件流            │
@@ -134,7 +136,7 @@ const (
 
 对应 pi 的 prepare → execute → finalize：
 
-1. **Prepare**：按名查工具 → 校验参数（对照 JSON Schema 的 required/type 做基础校验）→ `BeforeToolCall` 钩子（可 `Block`，可 `Terminate`）。
+1. **Prepare**：按名查工具 → 校验参数（对照 JSON Schema 的 required/type 做基础校验）→ 权限评估 → `BeforeToolCall` 钩子（可 `Block`，可 `Terminate`）。
 2. **Execute**：`tool.Execute(ctx, id, args, onUpdate)`；`onUpdate` 回调发 `tool_execution_update`（流式 partial result）。默认**并行**（goroutine + WaitGroup，结果按原顺序入上下文）；任一工具声明 `ExecutionModeSequential` 或全局 `ToolExecution = sequential` 时整批串行。
 3. **Finalize**：`AfterToolCall` 钩子可改写 content/isError/terminate。所有结果 `Terminate=true` 时终止循环。
 
@@ -150,7 +152,15 @@ type AgentTool interface {
 }
 ```
 
-### 4.5 状态与并发
+### 4.5 权限评估（pkg/permission）
+
+- `Options.Permission` 接收独立 `permission.Evaluator`；为 nil 时不评估，保持已有库嵌入行为，默认 CLI 则显式启用 `permission.Policy`。
+- `Policy` 支持 default / acceptEdits / plan / dontAsk / bypassPermissions，以及 `*` 或精确工具名规则；deny 规则和工具硬拒绝优先于所有自动允许。
+- 工具通过可选接口提供只读属性和权限自检；未提供的自定义工具按非只读、需要审批处理。只读工具自动允许，write/edit/bash 默认进入宿主审批。
+- 权限拒绝、审批中止和 context 取消都生成配对的 error ToolResult；权限评估先于 `BeforeToolCall`，审批器只负责 allow/deny，异常或空决策一律 fail closed。
+- 权限层不是 sandbox；高权限执行仍建议使用容器或受限用户。
+
+### 4.6 状态与并发
 
 - 单活动 run：`Prompt()` 进行中再调用返回错误，引导用 `Steer()` / `FollowUp()`。
 - 双队列 `PendingMessageQueue`，`QueueMode = "all" | "one-at-a-time"`。
@@ -201,19 +211,20 @@ type AgentTool interface {
 ## 7. pkg/tui + cmd/goagent —— 终端客户端
 
 - **TUI 模式（默认）**：Bubble Tea 全屏应用，Bubbles viewport/textarea 分别负责历史滚动与多行输入，Lip Gloss 负责样式和自适应布局。`Agent.Subscribe` 的生命周期事件通过 `Program.Send` 转入 UI 更新循环，assistant 流式内容与并行工具状态按事件归并。
+- **权限审批**：TUI Approver 通过 `Program.Send` 提交请求并等待响应 channel，Model 排队处理并行工具审批；`y` 允许、`n` 拒绝，Esc/Ctrl+C 拒绝未决请求并中止 run。REPL 与普通输入共用同一个 `bufio.Reader`；print 的 Approver 直接拒绝，不读取 stdin。
 - **运行轨迹**：thinking 与工具调用/输出带活动状态。`auto` 模式下活动中展开、结束后折叠并保留摘要；`expanded`/`collapsed` 手动控制全部轨迹，Ctrl+O 切换，`/trace auto|expand|collapse` 精确设置。
 - **Token 用量**：assistant message_end 时累计 provider usage，状态栏显示最近 input/output、当前分支累计 total 和按 token 加权的缓存命中率；`/usage` 展示最近/累计命中率及缓存、成本明细。resume/branch/compact 时从消息重建，避免重复计数。
 - **异步操作**：prompt、compaction 和用户 bash 都作为 `tea.Cmd` 执行；Esc/Ctrl+C 通过 context 与 `Agent.Abort()` 中止。Enter 发送，Alt+Enter 等组合键换行，PgUp/PgDn/鼠标滚轮浏览历史。
 - **REPL 回退**：`goagent -repl` 保留原 stdlib `bufio` 行式界面，适合不需要全屏控制的环境。
 - **print 模式**：`goagent -p "prompt"`，流式输出文本，工具调用打印摘要，退出码反映 stopReason。
 - 会话命令：`/help`、`/skills`、`/branch <id>`、`/compact`、`/trace`、`/tree`、`/resume`、`/usage`、`/quit`；`!cmd` 执行 bash 并在当前界面显示输出，不注入模型上下文。
-- 配置：环境变量 `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`GOAGENT_MODEL`、`ANTHROPIC_API_KEY`；会话文件默认 `~/.goagent/sessions/`。
+- 配置：环境变量 `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`GOAGENT_MODEL`、`ANTHROPIC_API_KEY`；会话文件默认 `~/.goagent/sessions/`；权限由 `-permission`、`-yes`、`-allow`、`-deny` 控制。
 
 ## 8. 与 pi 的差异（刻意决策）
 
 1. **无动态扩展加载**：pi 的 TS 扩展系统在 Go 里用「钩子字段 + 工具注册接口」替代，能力面一致（事件订阅、before/after tool、注册工具/命令），牺牲运行时热插拔。
 2. **使用现成 TUI 框架**：pi-tui 是自研差分渲染框架，goagent 使用 Charm 生态的 Bubble Tea/Bubbles/Lip Gloss，核心 agent/harness 不依赖这些 UI 包。
-3. **无权限系统**：与 pi 一致，不做 sandbox，建议容器化运行。
+3. **权限控制但无 sandbox**：独立权限层提供模式、规则和审批；进程与文件系统不做强制隔离，高权限运行仍建议容器化。
 4. **无 RPC/server**：留作路线图（pi 的这一层本身也标注 experimental）。
 
 ## 9. 开发计划

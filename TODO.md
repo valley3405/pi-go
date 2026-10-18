@@ -26,19 +26,19 @@
 
 验收：例如 10 条消息、保留最近 4 条时，重建结果为 1 条摘要加 4 条最近消息；重复压缩和分支恢复结果一致，重建后的估算 token 数确实下降。
 
-### 2. 增加独立权限层，并接入默认 CLI
+### 2. 增加独立权限层，并接入默认 CLI（已完成）
 
-位置：可新增 `pkg/permission`；接入 `pkg/agent/loop.go`、`pkg/tools`、`cmd/goagent`、`pkg/tui`
+位置：`pkg/permission`、`pkg/agent/loop.go`、`pkg/tools`、`cmd/goagent`、`pkg/tui`
 
 参考：Norma 的 [`permission`](https://github.com/Autumn-27/Norma/blob/main/permission/permission.go) 和 fail-closed 工具默认值。
 
-- [ ] 定义 `allow / deny / ask` 决策及权限模式，至少覆盖默认审批、只读/plan、自动接受编辑、完全绕过四种场景。
-- [ ] 支持 allow/deny 规则，保证 deny 优先级高于 allow 和 bypass。
-- [ ] 为工具补充只读、并发安全和权限自检元数据；未声明安全属性的自定义工具采用保守默认值。
-- [ ] 明确执行顺序：参数校验 → 权限评估 → `BeforeToolCall` → Execute → `AfterToolCall`。
-- [ ] TUI/REPL 提供工具审批交互；print 等非交互模式不得隐式等待 stdin，应通过 `-yes` 或规则显式放权。
-- [ ] 权限拒绝和运行中止时仍为每个工具调用生成配对结果，避免破坏下一轮 LLM 消息。
-- [ ] 文档明确：权限系统不是容器沙箱，高权限运行仍建议使用容器或受限用户。
+- [x] 定义 `allow / deny / ask` 决策及 default、acceptEdits、plan、dontAsk、bypassPermissions 模式。
+- [x] 支持 `*` 和精确工具名 allow/deny 规则，保证 deny 优先级高于 allow 和 bypass；参数级规则暂未支持。
+- [x] 为工具补充只读和权限自检元数据；未声明安全属性的自定义工具采用保守默认值。并发安全元数据由第 3 项继续完善。
+- [x] 明确执行顺序：参数校验 → 权限评估 → `BeforeToolCall` → Execute → `AfterToolCall`。
+- [x] TUI/REPL 提供工具审批交互；print 不等待 stdin，通过 `-yes`、`-allow` 或相应权限模式显式放权。
+- [x] 权限拒绝和运行中止时仍为每个工具调用生成配对结果，避免破坏下一轮 LLM 消息。
+- [x] 文档明确：权限系统不是容器沙箱，高权限运行仍建议使用容器或受限用户。
 
 验收：权限模式与规则组合有表驱动测试；写文件、Bash、只读工具分别覆盖允许、拒绝、审批和 bypass；默认 CLI 不再无提示执行未授权写操作。
 
