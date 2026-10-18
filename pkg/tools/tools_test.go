@@ -127,7 +127,7 @@ func TestLS(t *testing.T) {
 }
 
 func TestCodingToolsPermissionMetadata(t *testing.T) {
-	readOnly := map[string]bool{"read": true, "ls": true, "grep": true}
+	readOnly := map[string]bool{"read": true, "ls": true, "grep": true, "glob": true}
 	for _, tool := range tools.CodingTools() {
 		readOnlyTool, ok := tool.(interface {
 			IsReadOnly(json.RawMessage) bool

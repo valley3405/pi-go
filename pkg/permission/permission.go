@@ -187,5 +187,5 @@ func matchRule(rules []string, toolName string) bool {
 }
 
 func isEditTool(toolName string) bool {
-	return strings.EqualFold(toolName, "write") || strings.EqualFold(toolName, "edit")
+	return strings.EqualFold(toolName, "write") || strings.EqualFold(toolName, "edit") || strings.EqualFold(toolName, "multi_edit")
 }

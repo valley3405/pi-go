@@ -60,24 +60,14 @@ func intProp(desc string) map[string]any {
 	return map[string]any{"type": "integer", "description": desc}
 }
 
-// truncateOutput 头尾保留截断（对应 pi 的 truncate.ts）。
-func truncateOutput(s string, maxBytes int) string {
-	if len(s) <= maxBytes {
-		return s
-	}
-	head := maxBytes / 2
-	tail := maxBytes - head
-	return s[:head] + fmt.Sprintf("\n\n... [%d bytes truncated] ...\n\n", len(s)-maxBytes) + s[len(s)-tail:]
-}
-
 func normalizeCRLF(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
 
 // CodingTools 返回完整编码工具集（对应 pi 的 createCodingTools）。
 func CodingTools() []agent.AgentTool {
-	return []agent.AgentTool{Bash(), Read(), Write(), Edit(), LS(), Grep()}
+	return []agent.AgentTool{Bash(), Read(), Write(), Edit(), MultiEdit(), LS(), Grep(), Glob()}
 }
 
 // ReadOnlyTools 返回只读工具集（对应 pi 的 createReadOnlyTools）。
 func ReadOnlyTools() []agent.AgentTool {
-	return []agent.AgentTool{Read(), LS(), Grep()}
+	return []agent.AgentTool{Read(), LS(), Grep(), Glob()}
 }

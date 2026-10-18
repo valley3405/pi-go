@@ -19,7 +19,7 @@ type BashResultDetails struct {
 	Success  bool `json:"success"`
 }
 
-// Bash 执行 shell 命令（对应 pi 的 bash 工具）：超时 + 输出截断。
+// Bash 执行 shell 命令（对应 pi 的 bash 工具）：超时 + 进程组清理，最终输出由 Agent 统一治理。
 func Bash() agent.AgentTool {
 	return &bashTool{baseTool{
 		name: "bash",
@@ -79,7 +79,7 @@ func (t *bashTool) Execute(ctx context.Context, callID string, args json.RawMess
 	cmd.Stderr = &buf
 	err := cmd.Run()
 
-	out := truncateOutput(buf.String(), 100*1024)
+	out := buf.String()
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
 		out += fmt.Sprintf("\n(command timed out after %ds, process group killed)", p.Timeout)

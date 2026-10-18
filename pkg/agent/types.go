@@ -190,6 +190,7 @@ type loopConfig struct {
 	model          llm.Model
 	toolExecution  ExecutionMode
 	maxTurns       int
+	output         outputConfig
 	permission     permission.Evaluator
 	convertToLLM   func([]AgentMessage) ([]llm.Message, error)
 	transformCtx   func(context.Context, []AgentMessage) ([]AgentMessage, error)

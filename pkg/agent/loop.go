@@ -549,6 +549,7 @@ func runOneToolCall(ctx context.Context, curCtx *Context, msg AgentMessage, tc *
 			}
 		}
 	}
+	fin.result = captureToolResult(fin.result, tc.Name, tc.ID, cfg.output)
 	return fin, nil
 }
 

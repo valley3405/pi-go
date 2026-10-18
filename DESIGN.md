@@ -143,7 +143,7 @@ const (
 
 1. **Prepare**：按名查工具 → 校验参数（对照 JSON Schema 的 required/type 做基础校验）→ 权限评估 → `BeforeToolCall` 钩子（可 `Block`，可 `Terminate`）。
 2. **Execute**：`tool.Execute(ctx, id, args, onUpdate)`；`onUpdate` 回调发 `tool_execution_update`（流式 partial result）。默认**并行**（goroutine + WaitGroup，结果按原顺序入上下文）；任一工具声明 `ExecutionModeSequential` 或全局 `ToolExecution = sequential` 时整批串行。
-3. **Finalize**：`AfterToolCall` 钩子可改写 content/isError/terminate。所有结果 `Terminate=true` 时终止循环。
+3. **Finalize**：`AfterToolCall` 钩子可改写 content/isError/terminate；随后统一执行工具输出截断或完整落盘。所有结果 `Terminate=true` 时终止循环。
 
 `AgentTool` 接口：
 
@@ -204,16 +204,20 @@ type AgentTool interface {
 
 ## 6. pkg/tools —— 内置编码工具
 
-对齐 pi 的最小工具集，全部实现 `agent.AgentTool`：
+全部实现 `agent.AgentTool`：
 
 | 工具 | 说明 | 关键实现 |
 |---|---|---|
-| `bash` | 执行 shell 命令 | `os/exec` + 超时 + 输出截断（头尾保留） |
+| `bash` | 执行 shell 命令 | `os/exec` + 超时 + 进程组清理；完整输出交给 Agent 统一治理 |
 | `read` | 读文件（offset/limit，行号前缀） | `bufio.Scanner` |
 | `write` | 写文件 | 经 `FileMutationQueue`（全局 mutex 串行化写操作，对应 pi 的 file-mutation-queue） |
 | `edit` | 精确字符串替换（old_string 唯一性校验） | 同 pi 的 edit 语义 |
+| `multi_edit` | 同文件多组顺序替换 | 全部成功后才写盘，全程持有 FileMutationQueue |
 | `ls` | 列目录 | `os.ReadDir` |
 | `grep` | 正则搜索文件内容 | `regexp` + `filepath.WalkDir` + .gitignore 简化支持 |
+| `glob` | 按 `*`、`?`、`**` 查找文件 | rune-safe 模式转 regexp + 排序 + max_results |
+
+最终 ToolResult 在 `AfterToolCall` 后统一按字符数捕获：未配置 `ToolOutputDir` 时进行 rune-safe 头尾截断；配置后以 0600 临时文件保存完整文本，模型仅收到头部、省略说明和路径。`MaxToolOutputChars` 默认 30000，多个文本块合计计算，非文本块保留。
 
 ## 7. pkg/tui + cmd/goagent —— 终端客户端
 
@@ -226,7 +230,7 @@ type AgentTool interface {
 - **终止状态**：TUI 在 agent_end 后显示非 completed 原因；REPL/print 通过 printSubscriber 输出原因，print 按 completed=0、timeout=124、aborted=130、其他=1 退出。
 - **print 模式**：`goagent -p "prompt"`，流式输出文本，工具调用打印摘要，退出码反映 TerminationReason。
 - 会话命令：`/help`、`/skills`、`/branch <id>`、`/compact`、`/trace`、`/tree`、`/resume`、`/usage`、`/quit`；`!cmd` 执行 bash 并在当前界面显示输出，不注入模型上下文。
-- 配置：环境变量 `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`GOAGENT_MODEL`、`ANTHROPIC_API_KEY`；会话文件默认 `~/.goagent/sessions/`；权限由 `-permission`、`-yes`、`-allow`、`-deny` 控制；预算由 `-max-turns`（默认 50）和 `-max-duration`（默认关闭）控制。
+- 配置：环境变量 `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`GOAGENT_MODEL`、`ANTHROPIC_API_KEY`；会话文件默认 `~/.goagent/sessions/`；权限由 `-permission`、`-yes`、`-allow`、`-deny` 控制；预算由 `-max-turns`（默认 50）和 `-max-duration`（默认关闭）控制；输出由 `-tool-output-dir`（默认 `~/.goagent/tool-output`）和 `-max-tool-output`（默认 30000）控制。
 
 ## 8. 与 pi 的差异（刻意决策）
 

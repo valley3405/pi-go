@@ -22,6 +22,7 @@ func TestPolicyEvaluate(t *testing.T) {
 		{name: "default allows read only", policy: &permission.Policy{}, request: readOnly, expected: permission.Allow},
 		{name: "default denies mutating without approver", policy: &permission.Policy{}, request: mutating, expected: permission.Deny},
 		{name: "accept edits allows write", policy: &permission.Policy{Mode: permission.ModeAcceptEdits}, request: permission.Request{ToolName: "Write"}, expected: permission.Allow},
+		{name: "accept edits allows multi edit", policy: &permission.Policy{Mode: permission.ModeAcceptEdits}, request: permission.Request{ToolName: "multi_edit"}, expected: permission.Allow},
 		{name: "accept edits does not allow bash", policy: &permission.Policy{Mode: permission.ModeAcceptEdits}, request: mutating, expected: permission.Deny},
 		{name: "plan allows read only", policy: &permission.Policy{Mode: permission.ModePlan}, request: readOnly, expected: permission.Allow},
 		{name: "plan overrides allow rule", policy: &permission.Policy{Mode: permission.ModePlan, AllowedTools: []string{"bash"}}, request: mutating, expected: permission.Deny},

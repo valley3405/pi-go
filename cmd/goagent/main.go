@@ -43,6 +43,8 @@ func main() {
 		permissionMode = flag.String("permission", "default", "permission mode: default | acceptEdits | plan | dontAsk | bypass")
 		maxTurns       = flag.Int("max-turns", 50, "max LLM responses per prompt (0 = unlimited)")
 		maxDuration    = flag.Duration("max-duration", 0, "max wall-clock duration per prompt (0 = unlimited)")
+		toolOutputDir  = flag.String("tool-output-dir", defaultToolOutputDir(), "directory for full oversized tool output (empty = disable spilling)")
+		maxToolOutput  = flag.Int("max-tool-output", agent.DefaultMaxToolOutputChars, "max characters returned to the model per tool result")
 		yes            = flag.Bool("yes", false, "auto-approve tools (deny rules still apply)")
 		repl           = flag.Bool("repl", false, "use the line-oriented REPL instead of the TUI")
 		showVersion    = flag.Bool("version", false, "print version and exit")
@@ -70,13 +72,15 @@ func main() {
 	}
 
 	a := agent.New(agent.Options{
-		SystemPrompt: systemPrompt,
-		Model:        model,
-		Tools:        tools.CodingTools(),
-		StreamFn:     registry.StreamSimple,
-		Permission:   policy,
-		MaxTurns:     *maxTurns,
-		MaxDuration:  *maxDuration,
+		SystemPrompt:       systemPrompt,
+		Model:              model,
+		Tools:              tools.CodingTools(),
+		StreamFn:           registry.StreamSimple,
+		Permission:         policy,
+		MaxTurns:           *maxTurns,
+		MaxDuration:        *maxDuration,
+		ToolOutputDir:      *toolOutputDir,
+		MaxToolOutputChars: *maxToolOutput,
 	})
 	a.GetAPIKey = resolveAPIKey
 
@@ -137,6 +141,11 @@ func envOr(key, def string) string {
 func defaultSessionDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".goagent", "sessions")
+}
+
+func defaultToolOutputDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".goagent", "tool-output")
 }
 
 func setupProvider(providerID, modelID, baseURL string, ctxSize int) (*llm.Registry, llm.Model, error) {

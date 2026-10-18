@@ -66,16 +66,18 @@ type State struct {
 // Agent 是低层循环的有状态封装（对应 pi 的 Agent 类）：
 // 持有 transcript、发出生命周期事件、执行工具、提供 steering/follow-up 队列。
 type Agent struct {
-	mu          sync.Mutex
-	state       State
-	listeners   []listener
-	nextLid     uint64
-	tools       []AgentTool
-	streamFn    llm.StreamFn
-	streamOpts  llm.StreamOptions
-	permission  permission.Evaluator
-	maxTurns    int
-	maxDuration time.Duration
+	mu                 sync.Mutex
+	state              State
+	listeners          []listener
+	nextLid            uint64
+	tools              []AgentTool
+	streamFn           llm.StreamFn
+	streamOpts         llm.StreamOptions
+	permission         permission.Evaluator
+	maxTurns           int
+	maxDuration        time.Duration
+	toolOutputDir      string
+	maxToolOutputChars int
 
 	// 可替换管线（对应 pi 的公开字段）
 	ConvertToLLM     func([]AgentMessage) ([]llm.Message, error)
@@ -115,6 +117,10 @@ type Options struct {
 	MaxTurns int
 	// MaxDuration 限制一次 Prompt 的总时长；<=0 表示不限制。
 	MaxDuration time.Duration
+	// ToolOutputDir 非空时，超限工具输出的完整文本保存到该目录。
+	ToolOutputDir string
+	// MaxToolOutputChars 限制返回给模型的工具输出字符数；<=0 使用默认值。
+	MaxToolOutputChars int
 }
 
 // New 创建 Agent。
@@ -126,17 +132,19 @@ func New(opts Options) *Agent {
 		opts.FollowUpMode = QueueOneAtATime
 	}
 	a := &Agent{
-		state:         State{SystemPrompt: opts.SystemPrompt, Model: opts.Model, PendingToolCalls: map[string]bool{}},
-		tools:         opts.Tools,
-		streamFn:      opts.StreamFn,
-		streamOpts:    opts.StreamOptions,
-		permission:    opts.Permission,
-		maxTurns:      opts.MaxTurns,
-		maxDuration:   opts.MaxDuration,
-		steeringQueue: &pendingMessageQueue{Mode: opts.SteeringMode},
-		followUpQueue: &pendingMessageQueue{Mode: opts.FollowUpMode},
-		ToolExecution: ExecutionParallel,
-		idleCh:        closedCh(),
+		state:              State{SystemPrompt: opts.SystemPrompt, Model: opts.Model, PendingToolCalls: map[string]bool{}},
+		tools:              opts.Tools,
+		streamFn:           opts.StreamFn,
+		streamOpts:         opts.StreamOptions,
+		permission:         opts.Permission,
+		maxTurns:           opts.MaxTurns,
+		maxDuration:        opts.MaxDuration,
+		toolOutputDir:      opts.ToolOutputDir,
+		maxToolOutputChars: opts.MaxToolOutputChars,
+		steeringQueue:      &pendingMessageQueue{Mode: opts.SteeringMode},
+		followUpQueue:      &pendingMessageQueue{Mode: opts.FollowUpMode},
+		ToolExecution:      ExecutionParallel,
+		idleCh:             closedCh(),
 	}
 	return a
 }
@@ -374,6 +382,7 @@ func (a *Agent) buildLoopConfig() loopConfig {
 		model:          a.state.Model,
 		toolExecution:  a.ToolExecution,
 		maxTurns:       a.maxTurns,
+		output:         outputConfig{dir: a.toolOutputDir, maxChars: a.maxToolOutputChars},
 		permission:     a.permission,
 		convertToLLM:   a.ConvertToLLM,
 		transformCtx:   a.TransformContext,

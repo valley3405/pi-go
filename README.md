@@ -10,11 +10,11 @@
 pkg/llm       统一多供应商 LLM 层：消息模型、流式事件流、Provider 注册表
               （OpenAI 兼容 / Anthropic / 测试用 FauxProvider）
 pkg/agent     Agent 运行时：双层循环、steering/follow-up 双队列、
-              生命周期事件、工具三段管线（prepare/execute/finalize）
+              生命周期事件、运行预算、工具管线与统一输出治理
 pkg/permission 独立权限层：权限模式、allow/deny 规则、交互审批与 deny 优先
 pkg/harness   append-only JSONL 树状会话、分支、上下文压缩、
               skills 发现与注入（SKILL.md + frontmatter，gitignore 感知）
-pkg/tools     内置编码工具：bash / read / write / edit / ls / grep
+pkg/tools     内置编码工具：bash / read / write / edit / multi_edit / ls / grep / glob
 pkg/tui       Bubble Tea 全屏客户端：流式对话、工具状态、多行输入、会话命令
 cmd/goagent   CLI：TUI（默认）、行式 REPL（-repl）与 print 模式
 examples/     无 API key 的端到端演示（FauxProvider）
@@ -59,10 +59,10 @@ go run ./cmd/goagent -repl
 
 ## Permissions
 
-默认 CLI 启用权限控制：`read` / `ls` / `grep` 自动允许，`write` / `edit` / `bash` 默认需要审批。TUI 中按 `y` 允许、`n` 拒绝；REPL 中直接回答提示。TUI 还可用 `Shift+Tab` 在 `default → acceptEdits → plan` 间循环，状态栏以 `perm:<mode>` 显示当前模式；`bypass` 和 `dontAsk` 只能由启动参数设置，从这些模式按 `Shift+Tab` 会回到 `default`。可用模式：
+默认 CLI 启用权限控制：`read` / `ls` / `grep` / `glob` 自动允许，`write` / `edit` / `multi_edit` / `bash` 默认需要审批。TUI 中按 `y` 允许、`n` 拒绝；REPL 中直接回答提示。TUI 还可用 `Shift+Tab` 在 `default → acceptEdits → plan` 间循环，状态栏以 `perm:<mode>` 显示当前模式；`bypass` 和 `dontAsk` 只能由启动参数设置，从这些模式按 `Shift+Tab` 会回到 `default`。可用模式：
 
 - `default`：只读工具自动允许，其他工具按规则或审批结果执行。
-- `acceptEdits`：额外自动允许 `write` / `edit`。
+- `acceptEdits`：额外自动允许 `write` / `edit` / `multi_edit`。
 - `plan`：仅允许只读工具。
 - `dontAsk`：不发起审批，只允许只读工具和 allow 规则命中的工具。
 - `bypass`：除 deny 规则外全部允许；`-yes` 是此模式的简写。
@@ -90,6 +90,20 @@ CLI 默认最多 50 次 LLM 响应、不限时长；库嵌入时 `MaxTurns` / `M
 `agent_end` 与 `Agent.Snapshot().TerminationReason` 会给出 `completed`、`aborted`、`timeout`、`max_turns`、`output_limit`、`model_error`、`prompt_too_long` 或 `error`。无工具调用的输出截断最多自动续写恢复 3 次，耗尽后以 `output_limit` 结束。
 
 TUI 和 REPL 会显示非 completed 原因；print 退出码为：正常 0、超时 124、用户中止 130，其余错误/预算耗尽为 1。
+
+## 工具输出与编码工具
+
+Agent 在工具 finalize 阶段统一限制输出，`MaxToolOutputChars` 默认 30000 字符，内置和自定义工具都适用。未配置 `ToolOutputDir` 时按 rune 安全地进行头尾截断；配置后将完整文本写入 0600 文件，模型只接收头部、省略说明和文件路径。
+
+```bash
+# CLI 默认把超限完整输出保存到 ~/.goagent/tool-output
+go run ./cmd/goagent -max-tool-output 30000
+
+# 关闭落盘（仍为头尾截断）
+go run ./cmd/goagent -tool-output-dir ""
+```
+
+内置工具新增：`glob` 支持 `*`、`?`、`**` 文件查找；`multi_edit` 在同一文件内顺序应用多组替换，任一失败都不会写入部分结果。库嵌入时 `ToolOutputDir` 默认为空。
 
 ## Skills
 
