@@ -156,6 +156,7 @@ type AgentTool interface {
 
 - `Options.Permission` 接收独立 `permission.Evaluator`；为 nil 时不评估，保持已有库嵌入行为，默认 CLI 则显式启用 `permission.Policy`。
 - `Policy` 支持 default / acceptEdits / plan / dontAsk / bypassPermissions，以及 `*` 或精确工具名规则；deny 规则和工具硬拒绝优先于所有自动允许。
+- `SetMode` / `CurrentMode` 支持运行时模式切换；`Evaluate` 在读锁下快照配置后释放锁，审批等待期间不持锁，可与 TUI 和工具 goroutine 并发执行。
 - 工具通过可选接口提供只读属性和权限自检；未提供的自定义工具按非只读、需要审批处理。只读工具自动允许，write/edit/bash 默认进入宿主审批。
 - 权限拒绝、审批中止和 context 取消都生成配对的 error ToolResult；权限评估先于 `BeforeToolCall`，审批器只负责 allow/deny，异常或空决策一律 fail closed。
 - 权限层不是 sandbox；高权限执行仍建议使用容器或受限用户。
@@ -211,7 +212,7 @@ type AgentTool interface {
 ## 7. pkg/tui + cmd/goagent —— 终端客户端
 
 - **TUI 模式（默认）**：Bubble Tea 全屏应用，Bubbles viewport/textarea 分别负责历史滚动与多行输入，Lip Gloss 负责样式和自适应布局。`Agent.Subscribe` 的生命周期事件通过 `Program.Send` 转入 UI 更新循环，assistant 流式内容与并行工具状态按事件归并。
-- **权限审批**：TUI Approver 通过 `Program.Send` 提交请求并等待响应 channel，Model 排队处理并行工具审批；`y` 允许、`n` 拒绝，Esc/Ctrl+C 拒绝未决请求并中止 run。REPL 与普通输入共用同一个 `bufio.Reader`；print 的 Approver 直接拒绝，不读取 stdin。
+- **权限审批**：TUI Approver 通过 `Program.Send` 提交请求并等待响应 channel，Model 排队处理并行工具审批；`y` 允许、`n` 拒绝，Esc/Ctrl+C 拒绝未决请求并中止 run。`Shift+Tab` 在 default / acceptEdits / plan 间循环并更新状态栏，bypass/dontAsk 不进入快捷键循环。REPL 与普通输入共用同一个 `bufio.Reader`；print 的 Approver 直接拒绝，不读取 stdin。
 - **运行轨迹**：thinking 与工具调用/输出带活动状态。`auto` 模式下活动中展开、结束后折叠并保留摘要；`expanded`/`collapsed` 手动控制全部轨迹，Ctrl+O 切换，`/trace auto|expand|collapse` 精确设置。
 - **Token 用量**：assistant message_end 时累计 provider usage，状态栏显示最近 input/output、当前分支累计 total 和按 token 加权的缓存命中率；`/usage` 展示最近/累计命中率及缓存、成本明细。resume/branch/compact 时从消息重建，避免重复计数。
 - **异步操作**：prompt、compaction 和用户 bash 都作为 `tea.Cmd` 执行；Esc/Ctrl+C 通过 context 与 `Agent.Abort()` 中止。Enter 发送，Alt+Enter 等组合键换行，PgUp/PgDn/鼠标滚轮浏览历史。

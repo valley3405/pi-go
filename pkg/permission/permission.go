@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // Behavior 是权限决策结果。
@@ -84,22 +85,52 @@ type Evaluator interface {
 
 // Policy 组合权限模式、工具名规则和宿主审批器。
 type Policy struct {
+	mu              sync.RWMutex
 	Mode            Mode
 	AllowedTools    []string
 	DisallowedTools []string
 	Approver        Approver
 }
 
+// SetMode 在运行时切换权限模式，可与 Evaluate 并发调用。
+func (p *Policy) SetMode(mode Mode) error {
+	parsed, err := ParseMode(string(mode))
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	p.Mode = parsed
+	p.mu.Unlock()
+	return nil
+}
+
+// CurrentMode 返回当前权限模式。
+func (p *Policy) CurrentMode() Mode {
+	p.mu.RLock()
+	mode := p.Mode
+	p.mu.RUnlock()
+	if mode == "" {
+		return ModeDefault
+	}
+	return mode
+}
+
 // Evaluate 按 deny 优先的顺序评估权限。规则支持 * 或精确工具名。
-func (p Policy) Evaluate(ctx context.Context, req Request) Decision {
-	if matchRule(p.DisallowedTools, req.ToolName) {
+func (p *Policy) Evaluate(ctx context.Context, req Request) Decision {
+	p.mu.RLock()
+	mode := p.Mode
+	allowedTools := append([]string(nil), p.AllowedTools...)
+	disallowedTools := append([]string(nil), p.DisallowedTools...)
+	approver := p.Approver
+	p.mu.RUnlock()
+
+	if matchRule(disallowedTools, req.ToolName) {
 		return Denied(fmt.Sprintf("tool %q is disallowed by policy", req.ToolName))
 	}
 	if req.ToolDecision.Behavior == Deny {
 		return Denied(req.ToolDecision.Reason)
 	}
 
-	mode := p.Mode
 	if mode == "" {
 		mode = ModeDefault
 	}
@@ -116,7 +147,7 @@ func (p Policy) Evaluate(ctx context.Context, req Request) Decision {
 		return Denied(fmt.Sprintf("unknown permission mode %q", mode))
 	}
 
-	if matchRule(p.AllowedTools, req.ToolName) {
+	if matchRule(allowedTools, req.ToolName) {
 		return Allowed()
 	}
 	if mode == ModeAcceptEdits && isEditTool(req.ToolName) {
@@ -131,10 +162,10 @@ func (p Policy) Evaluate(ctx context.Context, req Request) Decision {
 	if mode == ModeDontAsk {
 		return Denied(fmt.Sprintf("tool %q requires approval but mode is dontAsk", req.ToolName))
 	}
-	if p.Approver == nil {
+	if approver == nil {
 		return Denied(fmt.Sprintf("tool %q requires approval but no approval handler is configured", req.ToolName))
 	}
-	decision := p.Approver(ctx, req)
+	decision := approver(ctx, req)
 	switch decision.Behavior {
 	case Allow:
 		return Allowed()

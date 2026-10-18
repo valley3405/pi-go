@@ -59,7 +59,7 @@ go run ./cmd/goagent -repl
 
 ## Permissions
 
-默认 CLI 启用权限控制：`read` / `ls` / `grep` 自动允许，`write` / `edit` / `bash` 默认需要审批。TUI 中按 `y` 允许、`n` 拒绝；REPL 中直接回答提示。可用模式：
+默认 CLI 启用权限控制：`read` / `ls` / `grep` 自动允许，`write` / `edit` / `bash` 默认需要审批。TUI 中按 `y` 允许、`n` 拒绝；REPL 中直接回答提示。TUI 还可用 `Shift+Tab` 在 `default → acceptEdits → plan` 间循环，状态栏以 `perm:<mode>` 显示当前模式；`bypass` 和 `dontAsk` 只能由启动参数设置，从这些模式按 `Shift+Tab` 会回到 `default`。可用模式：
 
 - `default`：只读工具自动允许，其他工具按规则或审批结果执行。
 - `acceptEdits`：额外自动允许 `write` / `edit`。
@@ -76,7 +76,7 @@ go run ./cmd/goagent -yes -p "修改文件并运行测试"
 
 `-allow` / `-deny` 支持重复传入或逗号分隔，规则为精确工具名或 `*`。print 模式不会隐式等待 stdin；需要写文件或执行 Bash 时，必须通过 `-yes`、`-allow` 或相应权限模式显式放权。
 
-作为库嵌入时，`agent.Options.Permission` 为 nil 表示不启用权限评估，保持原有行为；传入 `permission.Policy` 或自定义 `permission.Evaluator` 即可启用。权限系统不等于容器沙箱。
+作为库嵌入时，`agent.Options.Permission` 为 nil 表示不启用权限评估，保持原有行为；传入 `&permission.Policy` 或自定义 `permission.Evaluator` 即可启用。权限系统不等于容器沙箱。
 
 ## Skills
 

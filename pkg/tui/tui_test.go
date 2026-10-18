@@ -641,3 +641,41 @@ func TestAbortRejectsPendingApproval(t *testing.T) {
 	}
 	done()
 }
+
+func TestPermissionModeShortcut(t *testing.T) {
+	policy := &permission.Policy{}
+	m := New(newTestHarness(t, nil, false))
+	m.policy = policy
+	m.busy = true
+	for _, expected := range []permission.Mode{permission.ModeAcceptEdits, permission.ModePlan, permission.ModeDefault} {
+		updated, cmd := updateModel(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+		m = updated
+		if cmd != nil {
+			t.Fatal("permission shortcut returned unexpected async work")
+		}
+		if actual := policy.CurrentMode(); actual != expected {
+			t.Fatalf("mode=%q, want %q", actual, expected)
+		}
+		if !strings.Contains(m.statusView(), "perm:"+string(expected)) {
+			t.Fatalf("mode missing from status: %q", m.statusView())
+		}
+	}
+	if !strings.Contains(m.helpView(), "Shift+Tab") {
+		t.Fatalf("permission shortcut missing from help: %q", m.helpView())
+	}
+	if err := policy.SetMode(permission.ModeBypass); err != nil {
+		t.Fatal(err)
+	}
+	m, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if actual := policy.CurrentMode(); actual != permission.ModeDefault {
+		t.Fatalf("bypass shortcut mode=%q, want default", actual)
+	}
+}
+
+func TestPermissionModeShortcutWithoutPolicy(t *testing.T) {
+	m := New(newTestHarness(t, nil, false))
+	m, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if !strings.Contains(m.notice, "未配置权限策略") {
+		t.Fatalf("unexpected nil-policy notice: %q", m.notice)
+	}
+}

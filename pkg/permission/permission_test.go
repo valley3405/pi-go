@@ -3,6 +3,7 @@ package permission_test
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"goagent/pkg/permission"
@@ -14,24 +15,24 @@ func TestPolicyEvaluate(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		policy   permission.Policy
+		policy   *permission.Policy
 		request  permission.Request
 		expected permission.Behavior
 	}{
-		{name: "default allows read only", policy: permission.Policy{}, request: readOnly, expected: permission.Allow},
-		{name: "default denies mutating without approver", policy: permission.Policy{}, request: mutating, expected: permission.Deny},
-		{name: "accept edits allows write", policy: permission.Policy{Mode: permission.ModeAcceptEdits}, request: permission.Request{ToolName: "Write"}, expected: permission.Allow},
-		{name: "accept edits does not allow bash", policy: permission.Policy{Mode: permission.ModeAcceptEdits}, request: mutating, expected: permission.Deny},
-		{name: "plan allows read only", policy: permission.Policy{Mode: permission.ModePlan}, request: readOnly, expected: permission.Allow},
-		{name: "plan overrides allow rule", policy: permission.Policy{Mode: permission.ModePlan, AllowedTools: []string{"bash"}}, request: mutating, expected: permission.Deny},
-		{name: "dont ask allows listed tool", policy: permission.Policy{Mode: permission.ModeDontAsk, AllowedTools: []string{"BASH"}}, request: mutating, expected: permission.Allow},
-		{name: "dont ask denies unlisted tool", policy: permission.Policy{Mode: permission.ModeDontAsk}, request: mutating, expected: permission.Deny},
-		{name: "bypass allows mutating", policy: permission.Policy{Mode: permission.ModeBypass}, request: mutating, expected: permission.Allow},
-		{name: "deny rule beats bypass", policy: permission.Policy{Mode: permission.ModeBypass, DisallowedTools: []string{"bash"}}, request: mutating, expected: permission.Deny},
-		{name: "wildcard deny wins", policy: permission.Policy{Mode: permission.ModeBypass, DisallowedTools: []string{"*"}}, request: readOnly, expected: permission.Deny},
-		{name: "tool hard deny beats bypass", policy: permission.Policy{Mode: permission.ModeBypass}, request: permission.Request{ToolName: "bash", ToolDecision: permission.Denied("unsafe")}, expected: permission.Deny},
-		{name: "tool self allow", policy: permission.Policy{}, request: permission.Request{ToolName: "custom", ToolDecision: permission.Allowed()}, expected: permission.Allow},
-		{name: "invalid mode fails closed", policy: permission.Policy{Mode: "unexpected"}, request: readOnly, expected: permission.Deny},
+		{name: "default allows read only", policy: &permission.Policy{}, request: readOnly, expected: permission.Allow},
+		{name: "default denies mutating without approver", policy: &permission.Policy{}, request: mutating, expected: permission.Deny},
+		{name: "accept edits allows write", policy: &permission.Policy{Mode: permission.ModeAcceptEdits}, request: permission.Request{ToolName: "Write"}, expected: permission.Allow},
+		{name: "accept edits does not allow bash", policy: &permission.Policy{Mode: permission.ModeAcceptEdits}, request: mutating, expected: permission.Deny},
+		{name: "plan allows read only", policy: &permission.Policy{Mode: permission.ModePlan}, request: readOnly, expected: permission.Allow},
+		{name: "plan overrides allow rule", policy: &permission.Policy{Mode: permission.ModePlan, AllowedTools: []string{"bash"}}, request: mutating, expected: permission.Deny},
+		{name: "dont ask allows listed tool", policy: &permission.Policy{Mode: permission.ModeDontAsk, AllowedTools: []string{"BASH"}}, request: mutating, expected: permission.Allow},
+		{name: "dont ask denies unlisted tool", policy: &permission.Policy{Mode: permission.ModeDontAsk}, request: mutating, expected: permission.Deny},
+		{name: "bypass allows mutating", policy: &permission.Policy{Mode: permission.ModeBypass}, request: mutating, expected: permission.Allow},
+		{name: "deny rule beats bypass", policy: &permission.Policy{Mode: permission.ModeBypass, DisallowedTools: []string{"bash"}}, request: mutating, expected: permission.Deny},
+		{name: "wildcard deny wins", policy: &permission.Policy{Mode: permission.ModeBypass, DisallowedTools: []string{"*"}}, request: readOnly, expected: permission.Deny},
+		{name: "tool hard deny beats bypass", policy: &permission.Policy{Mode: permission.ModeBypass}, request: permission.Request{ToolName: "bash", ToolDecision: permission.Denied("unsafe")}, expected: permission.Deny},
+		{name: "tool self allow", policy: &permission.Policy{}, request: permission.Request{ToolName: "custom", ToolDecision: permission.Allowed()}, expected: permission.Allow},
+		{name: "invalid mode fails closed", policy: &permission.Policy{Mode: "unexpected"}, request: readOnly, expected: permission.Deny},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -92,4 +93,48 @@ func TestParseMode(t *testing.T) {
 	if _, err := permission.ParseMode("invalid"); err == nil || !strings.Contains(err.Error(), "unknown permission mode") {
 		t.Fatalf("expected invalid mode error, got %v", err)
 	}
+}
+
+func TestPolicySetMode(t *testing.T) {
+	policy := &permission.Policy{}
+	if mode := policy.CurrentMode(); mode != permission.ModeDefault {
+		t.Fatalf("initial mode=%q, want default", mode)
+	}
+	if err := policy.SetMode(permission.ModeAcceptEdits); err != nil {
+		t.Fatal(err)
+	}
+	if mode := policy.CurrentMode(); mode != permission.ModeAcceptEdits {
+		t.Fatalf("mode=%q, want acceptEdits", mode)
+	}
+	if err := policy.SetMode("invalid"); err == nil {
+		t.Fatal("expected invalid mode error")
+	}
+	if mode := policy.CurrentMode(); mode != permission.ModeAcceptEdits {
+		t.Fatalf("invalid update changed mode to %q", mode)
+	}
+}
+
+func TestPolicyConcurrentModeSwitch(t *testing.T) {
+	policy := &permission.Policy{}
+	var wg sync.WaitGroup
+	for worker := 0; worker < 4; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				decision := policy.Evaluate(context.Background(), permission.Request{ToolName: "bash"})
+				if decision.Behavior != permission.Allow && decision.Behavior != permission.Deny {
+					t.Errorf("unexpected decision during mode switch: %+v", decision)
+				}
+			}
+		}()
+	}
+	modes := []permission.Mode{permission.ModeDefault, permission.ModeAcceptEdits, permission.ModePlan, permission.ModeBypass}
+	for i := 0; i < 100; i++ {
+		if err := policy.SetMode(modes[i%len(modes)]); err != nil {
+			t.Error(err)
+		}
+		_ = policy.CurrentMode()
+	}
+	wg.Wait()
 }

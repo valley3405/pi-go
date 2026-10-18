@@ -128,6 +128,7 @@ type Model struct {
 	traceMode    traceMode
 	usage        usageStats
 	approvals    []approvalRequestMsg
+	policy       *permission.Policy
 }
 
 // New creates a TUI model backed by h.
@@ -172,6 +173,7 @@ func run(h *harness.Harness, policy *permission.Policy) error {
 		return errors.New("tui requires an agent harness")
 	}
 	m := New(h)
+	m.policy = policy
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if policy != nil {
 		policy.Approver = func(ctx context.Context, req permission.Request) permission.Decision {
@@ -287,6 +289,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch msg.String() {
+		case "shift+tab":
+			m.cyclePermissionMode()
+			return m, nil
 		case "ctrl+c":
 			if m.busy {
 				m.abortCurrent()
@@ -329,6 +334,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 	}
 	return m, cmd
+}
+
+var permissionModeCycle = []permission.Mode{
+	permission.ModeDefault,
+	permission.ModeAcceptEdits,
+	permission.ModePlan,
+}
+
+func (m *Model) cyclePermissionMode() {
+	if m.policy == nil {
+		m.notice = "未配置权限策略"
+		return
+	}
+	next := permission.ModeDefault
+	current := m.policy.CurrentMode()
+	for i, mode := range permissionModeCycle {
+		if current == mode {
+			next = permissionModeCycle[(i+1)%len(permissionModeCycle)]
+			break
+		}
+	}
+	if err := m.policy.SetMode(next); err != nil {
+		m.notice = "权限模式切换失败：" + err.Error()
+		return
+	}
+	m.notice = "权限模式：" + string(next)
 }
 
 func (m *Model) resolveApproval(decision permission.Decision) {
