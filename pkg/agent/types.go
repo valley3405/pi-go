@@ -76,6 +76,20 @@ type PermissionCheckedTool interface {
 	CheckPermissions(ctx context.Context, args json.RawMessage) permission.Decision
 }
 
+// TerminationReason 说明一次 agent run 的结束原因。
+type TerminationReason string
+
+const (
+	TerminationCompleted     TerminationReason = "completed"
+	TerminationAborted       TerminationReason = "aborted"
+	TerminationTimeout       TerminationReason = "timeout"
+	TerminationMaxTurns      TerminationReason = "max_turns"
+	TerminationOutputLimit   TerminationReason = "output_limit"
+	TerminationModelError    TerminationReason = "model_error"
+	TerminationPromptTooLong TerminationReason = "prompt_too_long"
+	TerminationError         TerminationReason = "error"
+)
+
 // ---- 生命周期事件（对应 pi 的 AgentEvent）----
 
 // EventType 是 agent 生命周期事件类型。
@@ -110,6 +124,7 @@ type Event struct {
 	// turn_end / agent_end
 	ToolResults []AgentMessage
 	Messages    []AgentMessage // agent_end：本次 run 新增的全部消息
+	Reason      TerminationReason
 }
 
 // ---- 钩子（对应 pi 的 beforeToolCall / afterToolCall / 等）----
@@ -174,6 +189,7 @@ type Context struct {
 type loopConfig struct {
 	model          llm.Model
 	toolExecution  ExecutionMode
+	maxTurns       int
 	permission     permission.Evaluator
 	convertToLLM   func([]AgentMessage) ([]llm.Message, error)
 	transformCtx   func(context.Context, []AgentMessage) ([]AgentMessage, error)

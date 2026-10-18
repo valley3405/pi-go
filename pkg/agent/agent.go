@@ -53,26 +53,29 @@ func (q *pendingMessageQueue) clear() {
 
 // State 是 agent 的可读状态（对应 pi 的 AgentState）。
 type State struct {
-	SystemPrompt     string
-	Model            llm.Model
-	Messages         []AgentMessage
-	IsStreaming      bool
-	StreamingMessage *AgentMessage
-	PendingToolCalls map[string]bool
-	ErrorMessage     string
+	SystemPrompt      string
+	Model             llm.Model
+	Messages          []AgentMessage
+	IsStreaming       bool
+	StreamingMessage  *AgentMessage
+	PendingToolCalls  map[string]bool
+	ErrorMessage      string
+	TerminationReason TerminationReason
 }
 
 // Agent 是低层循环的有状态封装（对应 pi 的 Agent 类）：
 // 持有 transcript、发出生命周期事件、执行工具、提供 steering/follow-up 队列。
 type Agent struct {
-	mu         sync.Mutex
-	state      State
-	listeners  []listener
-	nextLid    uint64
-	tools      []AgentTool
-	streamFn   llm.StreamFn
-	streamOpts llm.StreamOptions
-	permission permission.Evaluator
+	mu          sync.Mutex
+	state       State
+	listeners   []listener
+	nextLid     uint64
+	tools       []AgentTool
+	streamFn    llm.StreamFn
+	streamOpts  llm.StreamOptions
+	permission  permission.Evaluator
+	maxTurns    int
+	maxDuration time.Duration
 
 	// 可替换管线（对应 pi 的公开字段）
 	ConvertToLLM     func([]AgentMessage) ([]llm.Message, error)
@@ -108,6 +111,10 @@ type Options struct {
 	FollowUpMode  QueueMode
 	// Permission 为 nil 时不启用权限评估，保持库嵌入的原有行为。
 	Permission permission.Evaluator
+	// MaxTurns 限制每次 Prompt 的 LLM 响应次数；<=0 表示不限制。
+	MaxTurns int
+	// MaxDuration 限制一次 Prompt 的总时长；<=0 表示不限制。
+	MaxDuration time.Duration
 }
 
 // New 创建 Agent。
@@ -124,6 +131,8 @@ func New(opts Options) *Agent {
 		streamFn:      opts.StreamFn,
 		streamOpts:    opts.StreamOptions,
 		permission:    opts.Permission,
+		maxTurns:      opts.MaxTurns,
+		maxDuration:   opts.MaxDuration,
 		steeringQueue: &pendingMessageQueue{Mode: opts.SteeringMode},
 		followUpQueue: &pendingMessageQueue{Mode: opts.FollowUpMode},
 		ToolExecution: ExecutionParallel,
@@ -260,6 +269,7 @@ func (a *Agent) Reset() error {
 	a.state.StreamingMessage = nil
 	a.state.PendingToolCalls = map[string]bool{}
 	a.state.ErrorMessage = ""
+	a.state.TerminationReason = ""
 	a.mu.Unlock()
 	a.ClearQueues()
 	return nil
@@ -275,14 +285,21 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []AgentMessage) err
 	if err := a.beginRun(); err != nil {
 		return err
 	}
-	runCtx, cancel := context.WithCancel(ctx)
+	var runCtx context.Context
+	var cancel context.CancelFunc
+	if a.maxDuration > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, a.maxDuration)
+	} else {
+		runCtx, cancel = context.WithCancel(ctx)
+	}
 	a.runMu.Lock()
 	a.cancel = cancel
 	a.runMu.Unlock()
 
 	go func() {
-		_, err := runAgentLoop(runCtx, messages, a.contextSnapshot(), a.buildLoopConfig(), a.streamFn, a.emit)
-		a.finishRun(err)
+		defer cancel()
+		_, reason, err := runAgentLoop(runCtx, messages, a.contextSnapshot(), a.buildLoopConfig(), a.streamFn, a.emit)
+		a.finishRun(reason, err)
 	}()
 	return nil
 }
@@ -300,16 +317,20 @@ func (a *Agent) beginRun() error {
 	a.state.IsStreaming = true
 	a.state.StreamingMessage = nil
 	a.state.ErrorMessage = ""
+	a.state.TerminationReason = ""
 	a.mu.Unlock()
 	return nil
 }
 
 // finishRun 收尾：失败时合成错误消息并照常发事件（对应 pi 的 handleRunFailure），
 // 保证 UI 状态机一致。
-func (a *Agent) finishRun(runErr error) {
+func (a *Agent) finishRun(reason TerminationReason, runErr error) {
 	if runErr != nil {
+		if reason == "" {
+			reason = classifyRunError(runErr)
+		}
 		stopReason := llm.StopError
-		if errors.Is(runErr, context.Canceled) {
+		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
 			stopReason = llm.StopAborted
 		}
 		failMsg := AgentMessage{Message: llm.Message{
@@ -321,7 +342,7 @@ func (a *Agent) finishRun(runErr error) {
 		_ = a.emit(Event{Type: EventMessageStart, Message: &failMsg})
 		_ = a.emit(Event{Type: EventMessageEnd, Message: &failMsg})
 		_ = a.emit(Event{Type: EventTurnEnd, Message: &failMsg})
-		_ = a.emit(Event{Type: EventAgentEnd, Messages: []AgentMessage{failMsg}})
+		_ = a.emit(Event{Type: EventAgentEnd, Reason: reason, Messages: []AgentMessage{failMsg}})
 	}
 
 	a.mu.Lock()
@@ -352,6 +373,7 @@ func (a *Agent) buildLoopConfig() loopConfig {
 	return loopConfig{
 		model:          a.state.Model,
 		toolExecution:  a.ToolExecution,
+		maxTurns:       a.maxTurns,
 		permission:     a.permission,
 		convertToLLM:   a.ConvertToLLM,
 		transformCtx:   a.TransformContext,
@@ -391,6 +413,10 @@ func (a *Agent) emit(ev Event) error {
 		}
 	case EventAgentEnd:
 		a.state.StreamingMessage = nil
+		if ev.Reason == "" {
+			ev.Reason = TerminationCompleted
+		}
+		a.state.TerminationReason = ev.Reason
 	}
 	listeners := make([]func(Event), 0, len(a.listeners))
 	for _, l := range a.listeners {

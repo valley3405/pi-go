@@ -75,15 +75,15 @@
 
 验收：多轮工具调用中途越阈值也能压缩；413/context-length 可恢复；摘要失败不会形成递归或无限重试；压缩前后工具调用配对完整。
 
-### 5. 增加运行预算和明确的终止原因
+### 5. 增加运行预算和明确的终止原因（已完成）
 
 位置：`pkg/agent/agent.go`、`pkg/agent/loop.go`、`pkg/agent/types.go`、`cmd/goagent`
 
-- [ ] 增加 `MaxTurns` 和 `MaxDuration`，明确 turn 的计数口径。
-- [ ] 在事件或状态中区分 completed、aborted、max turns、timeout、model error、prompt too long 等原因。
-- [ ] 超时同时覆盖模型流和工具执行；取消时清理 goroutine、进程组和工具结果。
-- [ ] 对无工具调用的 `StopLength` 增加有上限的续写恢复，避免直接输出截断答案。
-- [ ] print 模式根据终止原因返回合适退出码，TUI 展示可理解的结束状态。
+- [x] 增加 `MaxTurns` 和 `MaxDuration`；每次 assistant/LLM 响应计一个 turn，包含工具后续回合和恢复请求。
+- [x] 在事件和状态中区分 completed、aborted、max_turns、timeout、output_limit、model_error、prompt_too_long、error。
+- [x] 超时同时覆盖模型流和工具执行；流等待监听 ctx，取消时补齐终态和工具结果，内置 Bash 继续清理进程组。
+- [x] 对无工具调用的 `StopLength` 增加最多 3 次续写恢复，耗尽后以 output_limit 结束。
+- [x] print 按原因返回 0/1/124/130，TUI 和 REPL 展示明确的结束原因。
 
 验收：持续调用工具的脚本模型不能无限运行；流式响应和工具执行两种场景下均能按时停止；恢复次数有硬上限，事件终态完整。
 

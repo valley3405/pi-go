@@ -112,7 +112,11 @@ func (m *Model) applyAgentEvent(event agent.Event) {
 		m.rejectApprovals("agent stopped")
 		m.busy = false
 		m.activity = ""
-		m.notice = ""
+		if event.Reason != "" && event.Reason != agent.TerminationCompleted {
+			m.notice = "终止原因：" + string(event.Reason)
+		} else {
+			m.notice = ""
+		}
 		for i := range m.entries {
 			m.entries[i].running = false
 		}

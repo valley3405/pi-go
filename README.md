@@ -78,6 +78,19 @@ go run ./cmd/goagent -yes -p "修改文件并运行测试"
 
 作为库嵌入时，`agent.Options.Permission` 为 nil 表示不启用权限评估，保持原有行为；传入 `&permission.Policy` 或自定义 `permission.Evaluator` 即可启用。权限系统不等于容器沙箱。
 
+## 运行预算与终止原因
+
+```bash
+go run ./cmd/goagent -max-turns 50 -max-duration 10m
+go run ./cmd/goagent -max-turns 0 -max-duration 0   # 均不限制
+```
+
+CLI 默认最多 50 次 LLM 响应、不限时长；库嵌入时 `MaxTurns` / `MaxDuration` 零值均为不限制。每次 assistant 响应计一个 turn，工具后续回合和截断恢复也计入预算。
+
+`agent_end` 与 `Agent.Snapshot().TerminationReason` 会给出 `completed`、`aborted`、`timeout`、`max_turns`、`output_limit`、`model_error`、`prompt_too_long` 或 `error`。无工具调用的输出截断最多自动续写恢复 3 次，耗尽后以 `output_limit` 结束。
+
+TUI 和 REPL 会显示非 completed 原因；print 退出码为：正常 0、超时 124、用户中止 130，其余错误/预算耗尽为 1。
+
 ## Skills
 
 在 `~/.goagent/skills/<name>/SKILL.md`（全局）或当前项目 `./agents/skills/<name>/SKILL.md`（项目级）放一个带 frontmatter 的文件即可注册技能：

@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"goagent/pkg/llm"
@@ -12,8 +14,10 @@ import (
 // eventSink 是循环内部的事件出口。
 type eventSink func(Event) error
 
+const maxOutputRecoveryAttempts = 3
+
 // runAgentLoop 以新 prompt 启动循环（对应 pi 的 runAgentLoop）。
-func runAgentLoop(ctx context.Context, prompts []AgentMessage, agentCtx Context, cfg loopConfig, streamFn llm.StreamFn, emit eventSink) ([]AgentMessage, error) {
+func runAgentLoop(ctx context.Context, prompts []AgentMessage, agentCtx Context, cfg loopConfig, streamFn llm.StreamFn, emit eventSink) ([]AgentMessage, TerminationReason, error) {
 	newMessages := append([]AgentMessage{}, prompts...)
 	curCtx := Context{
 		SystemPrompt: agentCtx.SystemPrompt,
@@ -22,29 +26,31 @@ func runAgentLoop(ctx context.Context, prompts []AgentMessage, agentCtx Context,
 	}
 
 	if err := emit(Event{Type: EventAgentStart}); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := emit(Event{Type: EventTurnStart}); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	for _, p := range prompts {
 		pm := p
 		if err := emit(Event{Type: EventMessageStart, Message: &pm}); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if err := emit(Event{Type: EventMessageEnd, Message: &pm}); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
-	err := runLoop(ctx, &curCtx, &newMessages, cfg, streamFn, emit)
-	return newMessages, err
+	reason, err := runLoop(ctx, &curCtx, &newMessages, cfg, streamFn, emit)
+	return newMessages, reason, err
 }
 
 // runLoop 是双层主循环，忠实复刻 pi 的 runLoop：
 // 外层在 agent 本要停止时消费 follow-up 队列；
 // 内层处理工具调用与 steering 消息，直到没有更多工作。
-func runLoop(ctx context.Context, curCtx *Context, newMessages *[]AgentMessage, cfg loopConfig, streamFn llm.StreamFn, emit eventSink) error {
+func runLoop(ctx context.Context, curCtx *Context, newMessages *[]AgentMessage, cfg loopConfig, streamFn llm.StreamFn, emit eventSink) (TerminationReason, error) {
 	firstTurn := true
+	turnCount := 0
+	outputRecoveryCount := 0
 	var pending []AgentMessage
 	if cfg.getSteering != nil {
 		pending = cfg.getSteering(ctx)
@@ -54,9 +60,13 @@ func runLoop(ctx context.Context, curCtx *Context, newMessages *[]AgentMessage, 
 		hasMoreToolCalls := true
 
 		for hasMoreToolCalls || len(pending) > 0 {
+			turnCount++
+			if cfg.maxTurns > 0 && turnCount > cfg.maxTurns {
+				return endAgent(TerminationMaxTurns, *newMessages, emit)
+			}
 			if !firstTurn {
 				if err := emit(Event{Type: EventTurnStart}); err != nil {
-					return err
+					return "", err
 				}
 			} else {
 				firstTurn = false
@@ -66,10 +76,10 @@ func runLoop(ctx context.Context, curCtx *Context, newMessages *[]AgentMessage, 
 			for _, m := range pending {
 				pm := m
 				if err := emit(Event{Type: EventMessageStart, Message: &pm}); err != nil {
-					return err
+					return "", err
 				}
 				if err := emit(Event{Type: EventMessageEnd, Message: &pm}); err != nil {
-					return err
+					return "", err
 				}
 				curCtx.Messages = append(curCtx.Messages, m)
 				*newMessages = append(*newMessages, m)
@@ -77,25 +87,30 @@ func runLoop(ctx context.Context, curCtx *Context, newMessages *[]AgentMessage, 
 			pending = nil
 
 			// 流式获取 assistant 响应
-			msg, err := streamAssistantResponse(ctx, curCtx, cfg, streamFn, emit)
-			if err != nil {
-				return err
+			msg, responseErr := streamAssistantResponse(ctx, curCtx, cfg, streamFn, emit)
+			if responseErr != nil && msg.StopReason == "" {
+				return "", responseErr
 			}
 			*newMessages = append(*newMessages, msg)
 
 			if msg.StopReason == llm.StopError || msg.StopReason == llm.StopAborted {
+				reason := classifyResponseTermination(ctx, msg.StopReason, responseErr)
 				m := msg
 				if err := emit(Event{Type: EventTurnEnd, Message: &m}); err != nil {
-					return err
+					return "", err
 				}
-				return emit(Event{Type: EventAgentEnd, Messages: *newMessages})
+				return endAgent(reason, *newMessages, emit)
 			}
 
 			toolCalls := msg.ToolCalls()
 			var toolResults []AgentMessage
 			hasMoreToolCalls = false
+			if msg.StopReason != llm.StopLength {
+				outputRecoveryCount = 0
+			}
 			if len(toolCalls) > 0 {
 				var batch executedBatch
+				var err error
 				if msg.StopReason == llm.StopLength {
 					// 截断保护：参数可能被截断，整批判失败（pi 同款防御）
 					batch, err = failTruncatedToolCalls(toolCalls, emit)
@@ -103,7 +118,7 @@ func runLoop(ctx context.Context, curCtx *Context, newMessages *[]AgentMessage, 
 					batch, err = executeToolCalls(ctx, curCtx, msg, toolCalls, cfg, emit)
 				}
 				if err != nil {
-					return err
+					return "", err
 				}
 				toolResults = batch.messages
 				hasMoreToolCalls = !batch.terminate
@@ -113,13 +128,30 @@ func runLoop(ctx context.Context, curCtx *Context, newMessages *[]AgentMessage, 
 
 			m := msg
 			if err := emit(Event{Type: EventTurnEnd, Message: &m, ToolResults: toolResults}); err != nil {
-				return err
+				return "", err
+			}
+
+			if msg.StopReason == llm.StopLength && len(toolCalls) == 0 {
+				if outputRecoveryCount >= maxOutputRecoveryAttempts {
+					return endAgent(TerminationOutputLimit, *newMessages, emit)
+				}
+				outputRecoveryCount++
+				recovery := NewUserMessage("Output token limit hit. Resume directly — no apology, no recap of what you already wrote. Continue exactly where you left off.")
+				if err := emit(Event{Type: EventMessageStart, Message: &recovery}); err != nil {
+					return "", err
+				}
+				if err := emit(Event{Type: EventMessageEnd, Message: &recovery}); err != nil {
+					return "", err
+				}
+				curCtx.Messages = append(curCtx.Messages, recovery)
+				*newMessages = append(*newMessages, recovery)
+				hasMoreToolCalls = true
 			}
 
 			if cfg.prepareNext != nil {
 				upd, err := cfg.prepareNext(ctx)
 				if err != nil {
-					return err
+					return "", err
 				}
 				if upd != nil && upd.Model != nil {
 					cfg.model = *upd.Model
@@ -131,10 +163,10 @@ func runLoop(ctx context.Context, curCtx *Context, newMessages *[]AgentMessage, 
 					Message: msg, ToolResults: toolResults, NewMessages: *newMessages,
 				})
 				if err != nil {
-					return err
+					return "", err
 				}
 				if stop {
-					return emit(Event{Type: EventAgentEnd, Messages: *newMessages})
+					return endAgent(TerminationCompleted, *newMessages, emit)
 				}
 			}
 
@@ -153,7 +185,50 @@ func runLoop(ctx context.Context, curCtx *Context, newMessages *[]AgentMessage, 
 		break
 	}
 
-	return emit(Event{Type: EventAgentEnd, Messages: *newMessages})
+	return endAgent(TerminationCompleted, *newMessages, emit)
+}
+
+func endAgent(reason TerminationReason, messages []AgentMessage, emit eventSink) (TerminationReason, error) {
+	return reason, emit(Event{Type: EventAgentEnd, Reason: reason, Messages: messages})
+}
+
+func classifyResponseTermination(ctx context.Context, stopReason llm.StopReason, responseErr error) TerminationReason {
+	if ctx.Err() != nil {
+		return classifyRunError(ctx.Err())
+	}
+	if stopReason == llm.StopAborted {
+		return TerminationAborted
+	}
+	if isPromptTooLong(responseErr) {
+		return TerminationPromptTooLong
+	}
+	return TerminationModelError
+}
+
+func classifyRunError(err error) TerminationReason {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return TerminationTimeout
+	case errors.Is(err, context.Canceled):
+		return TerminationAborted
+	case isPromptTooLong(err):
+		return TerminationPromptTooLong
+	default:
+		return TerminationError
+	}
+}
+
+func isPromptTooLong(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{"http 413", "status 413", "prompt too long", "prompt is too long", "context length", "context_length", "maximum context", "context window"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // streamAssistantResponse 执行一次 LLM 流式调用并把流事件转成 message_* 事件。
@@ -188,61 +263,85 @@ func streamAssistantResponse(ctx context.Context, curCtx *Context, cfg loopConfi
 	}
 
 	stream := streamFn(ctx, cfg.model, llmCtx, opts)
-
+	events := stream.Events()
 	var partial *AgentMessage
-	for ev := range stream.Events() {
-		switch ev.Type {
-		case llm.EventStart:
-			pm := AgentMessage{Message: ev.Partial}
-			partial = &pm
-			curCtx.Messages = append(curCtx.Messages, pm)
-			if err := emit(Event{Type: EventMessageStart, Message: &pm}); err != nil {
+	for {
+		select {
+		case <-ctx.Done():
+			var fm AgentMessage
+			if partial != nil {
+				fm = *partial
+				fm.StopReason = llm.StopAborted
+			} else {
+				fm = AgentMessage{Message: llm.Message{
+					Role:       llm.RoleAssistant,
+					Content:    []llm.Content{&llm.TextContent{Text: ""}},
+					StopReason: llm.StopAborted,
+					Timestamp:  nowMs(),
+				}}
+			}
+			if err := finishAssistantMessage(curCtx, partial, fm, emit); err != nil {
 				return AgentMessage{}, err
 			}
-		case llm.EventTextStart, llm.EventTextDelta, llm.EventTextEnd,
-			llm.EventThinkingStart, llm.EventThinkingDelta, llm.EventThinkingEnd,
-			llm.EventToolCallStart, llm.EventToolCallDelta, llm.EventToolCallEnd:
-			if partial != nil {
-				pm := AgentMessage{Message: ev.Partial}
-				partial = &pm
-				curCtx.Messages[len(curCtx.Messages)-1] = pm
-				evCopy := ev
-				if err := emit(Event{Type: EventMessageUpdate, Message: &pm, StreamEvent: &evCopy}); err != nil {
+			return fm, ctx.Err()
+		case ev, ok := <-events:
+			if !ok {
+				// 流异常结束（未发 done/error）也要补齐 message_* 终态。
+				final, ferr := stream.Result()
+				fm := AgentMessage{Message: final}
+				if ferr != nil || fm.StopReason == "" {
+					fm.StopReason = llm.StopError
+				}
+				if err := finishAssistantMessage(curCtx, partial, fm, emit); err != nil {
 					return AgentMessage{}, err
 				}
+				return fm, ferr
 			}
-		case llm.EventDone, llm.EventError:
-			final, ferr := stream.Result()
-			fm := AgentMessage{Message: final}
-			if partial != nil {
-				curCtx.Messages[len(curCtx.Messages)-1] = fm
-			} else {
-				curCtx.Messages = append(curCtx.Messages, fm)
-				if err := emit(Event{Type: EventMessageStart, Message: &fm}); err != nil {
-					return AgentMessage{}, ferr
+			switch ev.Type {
+			case llm.EventStart:
+				pm := AgentMessage{Message: ev.Partial}
+				partial = &pm
+				curCtx.Messages = append(curCtx.Messages, pm)
+				if err := emit(Event{Type: EventMessageStart, Message: &pm}); err != nil {
+					return AgentMessage{}, err
 				}
+			case llm.EventTextStart, llm.EventTextDelta, llm.EventTextEnd,
+				llm.EventThinkingStart, llm.EventThinkingDelta, llm.EventThinkingEnd,
+				llm.EventToolCallStart, llm.EventToolCallDelta, llm.EventToolCallEnd:
+				if partial != nil {
+					pm := AgentMessage{Message: ev.Partial}
+					partial = &pm
+					curCtx.Messages[len(curCtx.Messages)-1] = pm
+					evCopy := ev
+					if err := emit(Event{Type: EventMessageUpdate, Message: &pm, StreamEvent: &evCopy}); err != nil {
+						return AgentMessage{}, err
+					}
+				}
+			case llm.EventDone, llm.EventError:
+				final, ferr := stream.Result()
+				fm := AgentMessage{Message: final}
+				if ferr != nil && fm.StopReason == "" {
+					fm.StopReason = llm.StopError
+				}
+				if err := finishAssistantMessage(curCtx, partial, fm, emit); err != nil {
+					return AgentMessage{}, err
+				}
+				return fm, ferr
 			}
-			if ferr != nil && final.StopReason == "" {
-				fm.StopReason = llm.StopError
-			}
-			return fm, emit(Event{Type: EventMessageEnd, Message: &fm})
 		}
 	}
-	// 流异常结束（未发 done/error）也要补齐 message_* 终态，保证 UI 与会话一致。
-	final, ferr := stream.Result()
-	fm := AgentMessage{Message: final}
-	if ferr != nil || fm.StopReason == "" {
-		fm.StopReason = llm.StopError
-	}
+}
+
+func finishAssistantMessage(curCtx *Context, partial *AgentMessage, fm AgentMessage, emit eventSink) error {
 	if partial != nil {
 		curCtx.Messages[len(curCtx.Messages)-1] = fm
 	} else {
 		curCtx.Messages = append(curCtx.Messages, fm)
 		if err := emit(Event{Type: EventMessageStart, Message: &fm}); err != nil {
-			return AgentMessage{}, err
+			return err
 		}
 	}
-	return fm, emit(Event{Type: EventMessageEnd, Message: &fm})
+	return emit(Event{Type: EventMessageEnd, Message: &fm})
 }
 
 func toolSchemas(tools []AgentTool) []llm.Tool {

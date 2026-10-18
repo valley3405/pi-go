@@ -41,6 +41,8 @@ func main() {
 		noSession      = flag.Bool("no-session", false, "disable session persistence")
 		contextSize    = flag.Int("context", 128000, "context window size for auto-compaction (0 = off)")
 		permissionMode = flag.String("permission", "default", "permission mode: default | acceptEdits | plan | dontAsk | bypass")
+		maxTurns       = flag.Int("max-turns", 50, "max LLM responses per prompt (0 = unlimited)")
+		maxDuration    = flag.Duration("max-duration", 0, "max wall-clock duration per prompt (0 = unlimited)")
 		yes            = flag.Bool("yes", false, "auto-approve tools (deny rules still apply)")
 		repl           = flag.Bool("repl", false, "use the line-oriented REPL instead of the TUI")
 		showVersion    = flag.Bool("version", false, "print version and exit")
@@ -73,6 +75,8 @@ func main() {
 		Tools:        tools.CodingTools(),
 		StreamFn:     registry.StreamSimple,
 		Permission:   policy,
+		MaxTurns:     *maxTurns,
+		MaxDuration:  *maxDuration,
 	})
 	a.GetAPIKey = resolveAPIKey
 
@@ -182,11 +186,9 @@ func runPrint(h *harness.Harness, prompt string) int {
 		return 1
 	}
 	h.Agent.WaitForIdle()
-	if s := h.Agent.Snapshot(); s.ErrorMessage != "" {
-		return 1
-	}
+	code := terminationExitCode(h.Agent.Snapshot().TerminationReason)
 	fmt.Println()
-	return 0
+	return code
 }
 
 // printSubscriber 流式打印文本增量 + 工具执行摘要。
@@ -222,6 +224,10 @@ func printSubscriber(showThinking bool) func(agent.Event) {
 				mark = "ERR"
 			}
 			fmt.Printf("[tool:%s] %s done\n", ev.ToolName, mark)
+		case agent.EventAgentEnd:
+			if ev.Reason != "" && ev.Reason != agent.TerminationCompleted {
+				fmt.Printf("\n[agent] terminated: %s\n", ev.Reason)
+			}
 		}
 	}
 }

@@ -113,24 +113,29 @@ const (
 )
 ```
 
-`Agent.Subscribe(func(Event))`：监听器按注册顺序同步调用（pi 里是 await 序列；Go 里用同步调用 + 事件携带 `context.Context`）。`agent_end` 发出并等监听器返回后，run 才算 idle。
+`Agent.Subscribe(func(Event))`：监听器按注册顺序同步调用（pi 里是 await 序列；Go 里用同步调用 + 事件携带 `context.Context`）。`agent_end` 发出并等监听器返回后，run 才算 idle。`agent_end` 同时携带 `TerminationReason`，并写入 `State.TerminationReason`：completed / aborted / timeout / max_turns / output_limit / model_error / prompt_too_long / error。
 
 ### 4.3 双层循环（loop.go，忠实复刻 pi 的 runLoop）
 
 ```
 外层 for：agent 本要停止时，排空 followUpQueue，非空则继续
   内层 for (hasMoreToolCalls || pendingMessages 非空)：
+    0. turnCount++；若超过 MaxTurns，以 max_turns 发出 agent_end
     1. 注入 steering 消息（emit message_start/end）
     2. streamAssistantResponse：TransformContext → ConvertToLLM → StreamFn，
-       消费 EventStream 转成 message_* 事件
-    3. stopReason 为 error/aborted → turn_end + agent_end，退出
+       select 消费 EventStream 与 ctx.Done，转成 message_* 事件
+    3. stopReason 为 error/aborted → turn_end + 带原因的 agent_end，退出
     4. 有工具调用：
        - stopReason == "length"：整批判失败（pi 的截断保护：partial JSON
          挽救可能让残缺参数"看起来合法"，一律不执行，让模型重发）
        - 否则执行 → toolResult 入上下文
     5. turn_end → PrepareNextTurn（可换模型/思考级别）→ ShouldStopAfterTurn 钩子
-    6. 排空 steeringQueue 作为 pendingMessages
+    6. 无工具调用的 length 响应注入续写消息，最多恢复 3 次；
+       耗尽后以 output_limit 结束
+    7. 排空 steeringQueue 作为 pendingMessages
 ```
+
+每次 assistant 响应计一个 turn，恢复请求也计入 MaxTurns。MaxDuration 通过 runCtx 同时约束 Provider 流和工具执行；ctx 取消时不等待 `stream.Result()`，而是用当前 partial 补齐 aborted 终态。Provider 的 413/context-length 类错误归为 prompt_too_long，其他 hook/转换错误归为 error。
 
 ### 4.4 工具执行三段管线
 
@@ -166,6 +171,7 @@ type AgentTool interface {
 - 单活动 run：`Prompt()` 进行中再调用返回错误，引导用 `Steer()` / `FollowUp()`。
 - 双队列 `PendingMessageQueue`，`QueueMode = "all" | "one-at-a-time"`。
 - `Abort()` 通过 `context.CancelFunc`；`WaitForIdle()` 用 `chan struct{}`。
+- `MaxDuration > 0` 时 runCtx 由 `context.WithTimeout` 创建，否则由 `context.WithCancel` 创建；`beginRun`/`Reset` 会清空上一次的终止原因。
 - 内部状态用 `sync.Mutex` 保护（Go 没有单线程事件循环假设）。
 
 ## 5. pkg/harness —— 会话与压缩（≈ harness + session-manager）
@@ -217,9 +223,10 @@ type AgentTool interface {
 - **Token 用量**：assistant message_end 时累计 provider usage，状态栏显示最近 input/output、当前分支累计 total 和按 token 加权的缓存命中率；`/usage` 展示最近/累计命中率及缓存、成本明细。resume/branch/compact 时从消息重建，避免重复计数。
 - **异步操作**：prompt、compaction 和用户 bash 都作为 `tea.Cmd` 执行；Esc/Ctrl+C 通过 context 与 `Agent.Abort()` 中止。Enter 发送，Alt+Enter 等组合键换行，PgUp/PgDn/鼠标滚轮浏览历史。
 - **REPL 回退**：`goagent -repl` 保留原 stdlib `bufio` 行式界面，适合不需要全屏控制的环境。
-- **print 模式**：`goagent -p "prompt"`，流式输出文本，工具调用打印摘要，退出码反映 stopReason。
+- **终止状态**：TUI 在 agent_end 后显示非 completed 原因；REPL/print 通过 printSubscriber 输出原因，print 按 completed=0、timeout=124、aborted=130、其他=1 退出。
+- **print 模式**：`goagent -p "prompt"`，流式输出文本，工具调用打印摘要，退出码反映 TerminationReason。
 - 会话命令：`/help`、`/skills`、`/branch <id>`、`/compact`、`/trace`、`/tree`、`/resume`、`/usage`、`/quit`；`!cmd` 执行 bash 并在当前界面显示输出，不注入模型上下文。
-- 配置：环境变量 `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`GOAGENT_MODEL`、`ANTHROPIC_API_KEY`；会话文件默认 `~/.goagent/sessions/`；权限由 `-permission`、`-yes`、`-allow`、`-deny` 控制。
+- 配置：环境变量 `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`GOAGENT_MODEL`、`ANTHROPIC_API_KEY`；会话文件默认 `~/.goagent/sessions/`；权限由 `-permission`、`-yes`、`-allow`、`-deny` 控制；预算由 `-max-turns`（默认 50）和 `-max-duration`（默认关闭）控制。
 
 ## 8. 与 pi 的差异（刻意决策）
 
