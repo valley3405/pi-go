@@ -685,7 +685,7 @@ func TestPermissionModeShortcut(t *testing.T) {
 	m := New(newTestHarness(t, nil, false))
 	m.policy = policy
 	m.busy = true
-	for _, expected := range []permission.Mode{permission.ModeAcceptEdits, permission.ModePlan, permission.ModeDefault} {
+	for _, expected := range []permission.Mode{permission.ModeAcceptEdits, permission.ModeAuto, permission.ModePlan, permission.ModeDefault} {
 		updated, cmd := updateModel(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
 		m = updated
 		if cmd != nil {

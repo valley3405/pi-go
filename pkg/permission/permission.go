@@ -52,6 +52,7 @@ type Mode string
 const (
 	ModeDefault     Mode = "default"
 	ModeAcceptEdits Mode = "acceptEdits"
+	ModeAuto        Mode = "auto"
 	ModePlan        Mode = "plan"
 	ModeDontAsk     Mode = "dontAsk"
 	ModeBypass      Mode = "bypassPermissions"
@@ -64,6 +65,8 @@ func ParseMode(value string) (Mode, error) {
 		return ModeDefault, nil
 	case "acceptedits":
 		return ModeAcceptEdits, nil
+	case "auto":
+		return ModeAuto, nil
 	case "plan":
 		return ModePlan, nil
 	case "dontask":
@@ -101,7 +104,9 @@ type Policy struct {
 	// 含 shell 控制符、重定向或命令替换的命令不会被 allow 规则自动放行。
 	AllowedCommands []string
 	DeniedCommands  []string
-	Approver        Approver
+	// WorkingDir 是 auto 模式判断工作区内删除/移动/修改命令的根目录；为空时使用当前目录。
+	WorkingDir string
+	Approver   Approver
 }
 
 // SetMode 在运行时切换权限模式，可与 Evaluate 并发调用。
@@ -136,6 +141,7 @@ func (p *Policy) Evaluate(ctx context.Context, req Request) Decision {
 	disallowedTools := append([]string(nil), p.DisallowedTools...)
 	allowedCommands := append([]string(nil), p.AllowedCommands...)
 	deniedCommands := append([]string(nil), p.DeniedCommands...)
+	workingDir := p.WorkingDir
 	approver := p.Approver
 	p.mu.RUnlock()
 
@@ -172,7 +178,7 @@ func (p *Policy) Evaluate(ctx context.Context, req Request) Decision {
 		if !req.ToolDecision.RequireApproval {
 			return Allowed()
 		}
-	case ModeDefault, ModeAcceptEdits, ModeDontAsk:
+	case ModeDefault, ModeAcceptEdits, ModeAuto, ModeDontAsk:
 	default:
 		return Denied(fmt.Sprintf("unknown permission mode %q", mode))
 	}
@@ -194,6 +200,14 @@ func (p *Policy) Evaluate(ctx context.Context, req Request) Decision {
 	}
 	if req.ToolDecision.Behavior == Allow {
 		return Allowed()
+	}
+	if mode == ModeAuto {
+		decision := autoDecision(req, workingDir)
+		if decision.Behavior == Ask {
+			req.ToolDecision = decision
+			return approve(ctx, req, mode, approver)
+		}
+		return decision
 	}
 	return approve(ctx, req, mode, approver)
 }

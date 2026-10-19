@@ -32,12 +32,12 @@
 
 参考：Norma 的 [`permission`](https://github.com/Autumn-27/Norma/blob/main/permission/permission.go) 和 fail-closed 工具默认值。
 
-- [x] 定义 `allow / deny / ask` 决策及 default、acceptEdits、plan、dontAsk、bypassPermissions 模式。
+- [x] 定义 `allow / deny / ask` 决策及 default、acceptEdits、auto、plan、dontAsk、bypassPermissions 模式。
 - [x] 支持 `*` 和精确工具名 allow/deny 规则，保证 deny 优先级高于 allow 和 bypass；参数级规则暂未支持。
 - [x] 为工具补充只读和权限自检元数据；未声明安全属性的自定义工具采用保守默认值。并发安全元数据由第 3 项继续完善。
 - [x] 明确执行顺序：参数校验 → 权限评估 → `BeforeToolCall` → Execute → `AfterToolCall`。
 - [x] TUI/REPL 提供工具审批交互；print 不等待 stdin，通过 `-yes`、`-allow` 或相应权限模式显式放权。
-- [x] TUI 支持 `Shift+Tab` 在 default、acceptEdits、plan 间循环切换，并在状态栏显示当前模式。
+- [x] TUI 支持 `Shift+Tab` 在 default、acceptEdits、auto、plan 间循环切换，并在状态栏显示当前模式。
 - [x] 权限拒绝和运行中止时仍为每个工具调用生成配对结果，避免破坏下一轮 LLM 消息。
 - [x] 文档明确：权限系统不是容器沙箱，高权限运行仍建议使用容器或受限用户。
 
@@ -53,6 +53,16 @@
 - [x] deny 命令规则按部分匹配，优先于 `-yes`、bypass、工具 allow 规则和审批。
 - [x] plan 仍禁止 Bash；dontAsk/print 下仅 allow 命中的命令自动执行。
 - [x] 非法规则启动时报错，库调用中 fail closed。
+
+### 2.2 增加必要时询问的 auto 权限模式（已完成）
+
+位置：`pkg/permission`、`pkg/tools/workspace_test.go`、`pkg/tui`、`cmd/goagent`
+
+- [x] 新增 `-permission auto` 和 `Policy.WorkingDir`。
+- [x] 只读工具、工作区内写工具和常规开发命令自动执行。
+- [x] 工作区内删除/移动/修改（包括工作区位于 `/tmp` 时）自动执行；越界路径进入审批。
+- [x] 网络、提权、系统/进程控制、包安装、Git 写入、未知命令仍需询问。
+- [x] TUI `Shift+Tab` 循环包含 auto，RequiredApproval、deny 和 deny-command 仍然优先。
 
 ## P1：核心运行能力
 

@@ -378,6 +378,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 var permissionModeCycle = []permission.Mode{
 	permission.ModeDefault,
 	permission.ModeAcceptEdits,
+	permission.ModeAuto,
 	permission.ModePlan,
 }
 

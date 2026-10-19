@@ -41,7 +41,7 @@ func main() {
 		sessionDir      = flag.String("session-dir", defaultSessionDir(), "directory for session files")
 		noSession       = flag.Bool("no-session", false, "disable session persistence")
 		contextSize     = flag.Int("context", 128000, "context window size for auto-compaction (0 = off)")
-		permissionMode  = flag.String("permission", "default", "permission mode: default | acceptEdits | plan | dontAsk | bypass")
+		permissionMode  = flag.String("permission", "default", "permission mode: default | acceptEdits | auto | plan | dontAsk | bypass")
 		maxTurns        = flag.Int("max-turns", 50, "max LLM responses per prompt (0 = unlimited)")
 		maxDuration     = flag.Duration("max-duration", 0, "max wall-clock duration per prompt (0 = unlimited)")
 		toolOutputDir   = flag.String("tool-output-dir", defaultToolOutputDir(), "directory for full oversized tool output (empty = disable spilling)")
@@ -81,6 +81,7 @@ func main() {
 		os.Exit(2)
 	}
 	defer workspace.Close()
+	policy.WorkingDir = workspace.Root()
 	if err := os.Chdir(workspace.Root()); err != nil {
 		fmt.Fprintln(os.Stderr, "error: workspace:", err)
 		os.Exit(2)

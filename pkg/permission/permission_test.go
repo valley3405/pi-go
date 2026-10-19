@@ -83,6 +83,7 @@ func TestParseMode(t *testing.T) {
 	for input, expected := range map[string]permission.Mode{
 		"": permission.ModeDefault, "default": permission.ModeDefault,
 		"acceptEdits": permission.ModeAcceptEdits, "ACCEPTEDITS": permission.ModeAcceptEdits,
+		"auto": permission.ModeAuto, "AUTO": permission.ModeAuto,
 		"plan": permission.ModePlan, "dontAsk": permission.ModeDontAsk,
 		"bypass": permission.ModeBypass, "bypassPermissions": permission.ModeBypass,
 	} {
@@ -98,7 +99,7 @@ func TestParseMode(t *testing.T) {
 
 func TestRequiredApprovalOverridesAutomaticAllow(t *testing.T) {
 	request := permission.Request{ToolName: "read", ReadOnly: true, ToolDecision: permission.RequiredApproval("outside workspace")}
-	for _, mode := range []permission.Mode{permission.ModeDefault, permission.ModeAcceptEdits, permission.ModePlan, permission.ModeBypass, permission.ModeDontAsk} {
+	for _, mode := range []permission.Mode{permission.ModeDefault, permission.ModeAcceptEdits, permission.ModeAuto, permission.ModePlan, permission.ModeBypass, permission.ModeDontAsk} {
 		t.Run(string(mode), func(t *testing.T) {
 			calls := 0
 			policy := &permission.Policy{Mode: mode, AllowedTools: []string{"*"}, Approver: func(context.Context, permission.Request) permission.Decision { calls++; return permission.Allowed() }}
