@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -32,6 +34,9 @@ var (
 			Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "203"})
 	toolOutputStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "238", Dark: "250"})
+	approvalSelectedStyle = lipgloss.NewStyle().
+				Bold(true).
+				Reverse(true)
 )
 
 // View renders the complete terminal interface.
@@ -42,6 +47,9 @@ func (m Model) View() string {
 	}
 	if m.viewport.Height > 0 {
 		parts = append(parts, m.viewport.View())
+	}
+	if len(m.approvals) > 0 {
+		parts = append(parts, m.approvalPanelView())
 	}
 	parts = append(parts, m.input.View())
 	if m.height >= 4 {
@@ -102,9 +110,56 @@ func (m Model) helpView() string {
 		help = "Shift+Tab 权限 · " + help
 	}
 	if len(m.approvals) > 0 {
-		help = "y 允许 · n 拒绝 · Esc/Ctrl+C 中止"
+		help = "↑/↓/Tab 选择 · 1 允许 · 2 拒绝 · Enter 确认 · Ctrl+O 折叠/展开参数 · PgUp/PgDn 滚动参数 · Esc 中止"
 	}
 	return mutedStyle.MaxWidth(m.width).Render(help)
+}
+
+// approvalPanelView renders the pending approval with its full arguments and
+// an explicit allow/deny selection.
+func (m Model) approvalPanelView() string {
+	req := m.approvals[0].request
+	title := errorStyle.Bold(true).Render(fmt.Sprintf("审批 1/%d · %s", len(m.approvals), req.ToolName))
+	var body string
+	if m.approvalExpanded {
+		body = m.approvalScroll.View()
+	} else {
+		args := string(req.Args)
+		summary := fmt.Sprintf("参数 [已折叠 · %d chars · Ctrl+O 展开] %s", len([]rune(args)), singleLine(args, max(10, m.width-30)))
+		body = mutedStyle.MaxWidth(m.width).Render(summary)
+	}
+	allow, deny := "  允许", "  拒绝"
+	if m.approvalChoice == approvalChoiceAllow {
+		allow = approvalSelectedStyle.Render("▸ 允许")
+	} else {
+		deny = approvalSelectedStyle.Render("▸ 拒绝")
+	}
+	options := lipgloss.JoinHorizontal(lipgloss.Top, allow, "    ", deny)
+	return lipgloss.JoinVertical(lipgloss.Left, title, body, options)
+}
+
+// approvalBody returns the complete, untruncated approval content: the
+// approval reason (if any) followed by the full pretty-printed arguments.
+func (m Model) approvalBody() string {
+	req := m.approvals[0].request
+	var b strings.Builder
+	if req.ToolDecision.RequireApproval && req.ToolDecision.Reason != "" {
+		b.WriteString(req.ToolDecision.Reason)
+		b.WriteString("\n\n")
+	}
+	b.WriteString(prettyJSON(string(req.Args)))
+	return b.String()
+}
+
+func (m Model) approvalPanelHeight() int {
+	if len(m.approvals) == 0 {
+		return 0
+	}
+	if !m.approvalExpanded {
+		return 3
+	}
+	body := lipgloss.NewStyle().Width(max(1, m.width)).Render(m.approvalBody())
+	return clamp(lipgloss.Height(body), 1, max(3, m.height/3)) + 2
 }
 
 func (m *Model) resize(width, height int) {
@@ -134,7 +189,8 @@ func (m *Model) resize(width, height int) {
 	}
 	m.input.SetHeight(clamp(m.input.LineCount(), 1, min(maxInputRows, max(1, maxInputHeight))))
 	m.viewport.Width = m.width
-	m.viewport.Height = max(0, available-m.input.Height())
+	m.viewport.Height = max(0, available-m.input.Height()-m.approvalPanelHeight())
+	m.syncApprovalScroll()
 }
 
 func (m *Model) refreshTranscript(follow bool) {
@@ -299,6 +355,20 @@ func truncateRunes(text string, limit int) string {
 		return "…"
 	}
 	return string(runes[:limit-1]) + "…"
+}
+
+// prettyJSON formats raw JSON arguments for display, preserving the complete
+// content; non-JSON input is returned as-is.
+func prettyJSON(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "(无参数)"
+	}
+	var buf bytes.Buffer
+	if json.Indent(&buf, []byte(trimmed), "", "  ") == nil {
+		return buf.String()
+	}
+	return trimmed
 }
 
 func clamp(value, low, high int) int {

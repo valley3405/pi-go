@@ -589,8 +589,9 @@ func TestRuntimeCancelDoesNotLeakIntoNextPrompt(t *testing.T) {
 func TestApprovalQueueAllowAndDeny(t *testing.T) {
 	m := New(newTestHarness(t, nil, false))
 	m.busy = true
+	longArgs := `{"command":"` + strings.Repeat("x", 300) + `"}`
 	first := approvalRequestMsg{
-		request:  permission.Request{ToolName: "bash", Args: json.RawMessage(`{"command":"make test"}`)},
+		request:  permission.Request{ToolName: "bash", Args: json.RawMessage(longArgs)},
 		response: make(chan permission.Decision, 1),
 	}
 	second := approvalRequestMsg{
@@ -602,19 +603,56 @@ func TestApprovalQueueAllowAndDeny(t *testing.T) {
 	if len(m.approvals) != 2 || !strings.Contains(m.statusView(), "1/2") || !strings.Contains(m.statusView(), "bash") {
 		t.Fatalf("approval queue not rendered: %#v %q", m.approvals, m.statusView())
 	}
-	if !strings.Contains(m.helpView(), "y 允许") {
+	if !strings.Contains(m.helpView(), "Enter 确认") {
 		t.Fatalf("approval help missing: %q", m.helpView())
 	}
+	if m.approvalChoice != approvalChoiceDeny {
+		t.Fatalf("default approval choice = %d, want deny", m.approvalChoice)
+	}
 
+	// Single-key y/n must not approve or deny.
 	m, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	select {
+	case decision := <-first.response:
+		t.Fatalf("single key resolved approval: %+v", decision)
+	default:
+	}
+	if len(m.approvals) != 2 {
+		t.Fatalf("single key drained approval queue: %#v", m.approvals)
+	}
+
+	// The panel renders the complete arguments, not a truncated prefix.
+	compact := strings.Join(strings.Fields(m.View()), "")
+	if !strings.Contains(compact, strings.Repeat("x", 300)) {
+		t.Fatalf("approval panel did not render full args:\n%s", m.View())
+	}
+
+	// Explicit selection: choose 允许, then confirm with Enter.
+	m, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	m, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	if decision := <-first.response; decision.Behavior != permission.Allow {
 		t.Fatalf("first approval decision: %+v", decision)
 	}
 	if len(m.approvals) != 1 || !strings.Contains(m.statusView(), "write") {
 		t.Fatalf("second approval not activated: %#v %q", m.approvals, m.statusView())
 	}
+	if m.approvalChoice != approvalChoiceDeny {
+		t.Fatalf("choice not reset for next approval: %d", m.approvalChoice)
+	}
 
-	m, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	// Collapse hides the args, expand restores them.
+	m, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlO})
+	if m.approvalExpanded || !strings.Contains(m.View(), "已折叠") {
+		t.Fatalf("ctrl+o did not collapse approval args:\n%s", m.View())
+	}
+	m, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlO})
+	if !m.approvalExpanded || !strings.Contains(m.View(), `"path"`) {
+		t.Fatalf("ctrl+o did not expand approval args:\n%s", m.View())
+	}
+
+	// Default choice is deny; confirming without moving the selection denies.
+	m, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	if decision := <-second.response; decision.Behavior != permission.Deny {
 		t.Fatalf("second approval decision: %+v", decision)
 	}

@@ -59,7 +59,7 @@ go run ./cmd/goagent -repl
 
 ## Permissions
 
-默认 CLI 启用工作区约束和权限控制：工作区内 `read` / `ls` / `grep` / `glob` 自动允许，`write` / `edit` / `multi_edit` / `bash` 默认需要审批。工作区外读取必须单次审批，文件写入直接拒绝。TUI 中按 `y` 允许、`n` 拒绝；REPL 中直接回答提示。TUI 还可用 `Shift+Tab` 在 `default → acceptEdits → plan` 间循环，状态栏以 `perm:<mode>` 显示当前模式；`bypass` 和 `dontAsk` 只能由启动参数设置，从这些模式按 `Shift+Tab` 会回到 `default`。可用模式：
+默认 CLI 启用工作区约束和权限控制：工作区内 `read` / `ls` / `grep` / `glob` 自动允许，`write` / `edit` / `multi_edit` / `bash` 默认需要审批。工作区外读取必须单次审批，文件写入直接拒绝。审批面板始终展示完整参数（TUI 中可用 PgUp/PgDn 滚动、Ctrl+O 折叠/展开），不存在"仅展示前缀"的审批；选择需显式进行：TUI 中用 ↑/↓ 或 1/2 选择"允许/拒绝"后按 Enter 确认（默认选中"拒绝"），REPL 中输入 1 允许、2 拒绝。TUI 还可用 `Shift+Tab` 在 `default → acceptEdits → plan` 间循环，状态栏以 `perm:<mode>` 显示当前模式；`bypass` 和 `dontAsk` 只能由启动参数设置，从这些模式按 `Shift+Tab` 会回到 `default`。可用模式：
 
 - `default`：只读工具自动允许，其他工具按规则或审批结果执行。
 - `acceptEdits`：额外自动允许 `write` / `edit` / `multi_edit`。

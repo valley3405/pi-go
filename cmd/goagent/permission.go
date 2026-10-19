@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -46,25 +48,42 @@ func terminalApprover(reader *bufio.Reader) permission.Approver {
 		if err := ctx.Err(); err != nil {
 			return permission.Denied("operation aborted")
 		}
+		fmt.Println()
 		if req.ToolDecision.RequireApproval {
-			fmt.Printf("\n%s\nAllow %s %s ? [y/N] ", req.ToolDecision.Reason, req.ToolName, string(req.Args))
-		} else {
-			fmt.Printf("\nAllow %s %s ? [y/N] ", req.ToolName, truncate(string(req.Args), 120))
+			fmt.Println(req.ToolDecision.Reason)
 		}
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return permission.Denied("approval input unavailable")
-		}
-		if ctx.Err() != nil {
-			return permission.Denied("operation aborted")
-		}
-		switch strings.ToLower(strings.TrimSpace(line)) {
-		case "y", "yes":
-			return permission.Allowed()
-		default:
-			return permission.Denied("denied by user")
+		fmt.Printf("审批请求：%s\n参数：\n%s\n\n  1) 允许\n  2) 拒绝\n请选择 [1/2]: ", req.ToolName, prettyArgs(req.Args))
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return permission.Denied("approval input unavailable")
+			}
+			if ctx.Err() != nil {
+				return permission.Denied("operation aborted")
+			}
+			switch strings.TrimSpace(line) {
+			case "1":
+				return permission.Allowed()
+			case "2", "":
+				return permission.Denied("denied by user")
+			default:
+				fmt.Print("无效输入，请输入 1（允许）或 2（拒绝）: ")
+			}
 		}
 	}
+}
+
+// prettyArgs prints the complete tool arguments, indented when valid JSON.
+func prettyArgs(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return "(无参数)"
+	}
+	var buf bytes.Buffer
+	if json.Indent(&buf, []byte(trimmed), "", "  ") == nil {
+		return buf.String()
+	}
+	return trimmed
 }
 
 func nonInteractiveApprover(_ context.Context, req permission.Request) permission.Decision {

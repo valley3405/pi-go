@@ -50,9 +50,10 @@ func TestTerminalApprover(t *testing.T) {
 		input    string
 		expected permission.Behavior
 	}{
-		{input: "y\n", expected: permission.Allow},
-		{input: "YES\n", expected: permission.Allow},
-		{input: "n\n", expected: permission.Deny},
+		{input: "1\n", expected: permission.Allow},
+		{input: "y\n1\n", expected: permission.Allow}, // y alone is invalid, then explicit 1
+		{input: "yes\n", expected: permission.Deny},   // yes alone no longer approves (EOF after invalid input)
+		{input: "2\n", expected: permission.Deny},
 		{input: "\n", expected: permission.Deny},
 		{input: "", expected: permission.Deny},
 	}

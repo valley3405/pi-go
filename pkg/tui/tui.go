@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"goagent/pkg/agent"
 	"goagent/pkg/harness"
@@ -128,9 +129,19 @@ type Model struct {
 	notice       string
 	traceMode    traceMode
 	usage        usageStats
-	approvals    []approvalRequestMsg
-	policy       *permission.Policy
+
+	approvals        []approvalRequestMsg
+	approvalChoice   int
+	approvalExpanded bool
+	approvalScroll   viewport.Model
+
+	policy *permission.Policy
 }
+
+const (
+	approvalChoiceAllow = iota
+	approvalChoiceDeny
+)
 
 // New creates a TUI model backed by h.
 func New(h *harness.Harness) Model {
@@ -148,14 +159,16 @@ func New(h *harness.Harness) Model {
 	input.Focus()
 
 	m := Model{
-		harness:      h,
-		runtime:      &runtimeState{},
-		viewport:     viewport.New(defaultWidth, 1),
-		input:        input,
-		toolEntries:  make(map[string]int),
-		currentEntry: -1,
-		width:        defaultWidth,
-		height:       defaultHeight,
+		harness:          h,
+		runtime:          &runtimeState{},
+		viewport:         viewport.New(defaultWidth, 1),
+		approvalScroll:   viewport.New(defaultWidth, 1),
+		approvalExpanded: true,
+		input:            input,
+		toolEntries:      make(map[string]int),
+		currentEntry:     -1,
+		width:            defaultWidth,
+		height:           defaultHeight,
 	}
 	m.rebuildTranscript()
 	m.resize(defaultWidth, defaultHeight)
@@ -219,7 +232,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case approvalRequestMsg:
+		activate := len(m.approvals) == 0
 		m.approvals = append(m.approvals, msg)
+		if activate {
+			m.activateApprovalHead()
+		}
 		m.updateApprovalNotice()
 		return m, nil
 
@@ -280,10 +297,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if len(m.approvals) > 0 {
 			switch msg.String() {
-			case "y", "Y":
-				m.resolveApproval(permission.Allowed())
-			case "n", "N":
-				m.resolveApproval(permission.Denied("denied by user"))
+			case "up", "down", "left", "right", "tab":
+				if m.approvalChoice == approvalChoiceAllow {
+					m.approvalChoice = approvalChoiceDeny
+				} else {
+					m.approvalChoice = approvalChoiceAllow
+				}
+			case "1":
+				m.approvalChoice = approvalChoiceAllow
+			case "2":
+				m.approvalChoice = approvalChoiceDeny
+			case "enter":
+				if m.approvalChoice == approvalChoiceAllow {
+					m.resolveApproval(permission.Allowed())
+				} else {
+					m.resolveApproval(permission.Denied("denied by user"))
+				}
+			case "ctrl+o":
+				m.approvalExpanded = !m.approvalExpanded
+				m.resize(m.width, m.height)
+			case "pgup", "pgdown":
+				if m.approvalExpanded {
+					var cmd tea.Cmd
+					m.approvalScroll, cmd = m.approvalScroll.Update(msg)
+					return m, cmd
+				}
 			case "esc", "ctrl+c":
 				m.abortCurrent()
 			}
@@ -373,6 +411,11 @@ func (m *Model) resolveApproval(decision permission.Decision) {
 	default:
 	}
 	m.approvals = m.approvals[1:]
+	if len(m.approvals) > 0 {
+		m.activateApprovalHead()
+	} else {
+		m.resize(m.width, m.height)
+	}
 	m.updateApprovalNotice()
 }
 
@@ -384,7 +427,26 @@ func (m *Model) rejectApprovals(reason string) {
 		}
 	}
 	m.approvals = nil
+	m.resize(m.width, m.height)
 	m.updateApprovalNotice()
+}
+
+// activateApprovalHead resets the selection and scroll state when a new
+// request reaches the head of the approval queue.
+func (m *Model) activateApprovalHead() {
+	m.approvalChoice = approvalChoiceDeny
+	m.approvalExpanded = true
+	m.resize(m.width, m.height)
+	m.approvalScroll.GotoTop()
+}
+
+func (m *Model) syncApprovalScroll() {
+	if len(m.approvals) == 0 {
+		return
+	}
+	m.approvalScroll.Width = m.width
+	m.approvalScroll.Height = max(1, m.approvalPanelHeight()-2)
+	m.approvalScroll.SetContent(lipgloss.NewStyle().Width(max(1, m.width)).Render(m.approvalBody()))
 }
 
 func (m *Model) updateApprovalNotice() {
@@ -393,7 +455,7 @@ func (m *Model) updateApprovalNotice() {
 		return
 	}
 	request := m.approvals[0]
-	m.notice = fmt.Sprintf("等待审批 1/%d：%s %s · y 允许 / n 拒绝", len(m.approvals), request.request.ToolName, singleLine(string(request.request.Args), 120))
+	m.notice = fmt.Sprintf("等待审批 1/%d：%s · 请在下方选择", len(m.approvals), request.request.ToolName)
 	if request.request.ToolDecision.RequireApproval && !request.announced {
 		m.approvals[0].announced = true
 		m.appendSystem(request.request.ToolDecision.Reason, false)
