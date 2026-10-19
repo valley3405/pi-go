@@ -86,8 +86,9 @@ type bashDoneMsg struct {
 }
 
 type approvalRequestMsg struct {
-	request  permission.Request
-	response chan permission.Decision
+	request   permission.Request
+	response  chan permission.Decision
+	announced bool
 }
 
 type traceMode uint8
@@ -393,6 +394,11 @@ func (m *Model) updateApprovalNotice() {
 	}
 	request := m.approvals[0]
 	m.notice = fmt.Sprintf("等待审批 1/%d：%s %s · y 允许 / n 拒绝", len(m.approvals), request.request.ToolName, singleLine(string(request.request.Args), 120))
+	if request.request.ToolDecision.RequireApproval && !request.announced {
+		m.approvals[0].announced = true
+		m.appendSystem(request.request.ToolDecision.Reason, false)
+		m.refreshTranscript(true)
+	}
 }
 
 func (m *Model) abortCurrent() {

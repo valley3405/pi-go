@@ -59,12 +59,12 @@ func (t *globTool) Execute(ctx context.Context, callID string, args json.RawMess
 	}
 	re, err := compileGlobPattern(filepath.ToSlash(p.Pattern))
 	if err != nil {
-		return textResult("error: " + err.Error()), nil
+		return fileAccessError(ctx, err)
 	}
 
 	var matches []string
 	truncated := false
-	err = filepath.WalkDir(p.Path, func(path string, entry os.DirEntry, walkErr error) error {
+	err = walkDirectory(ctx, p.Path, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -92,7 +92,7 @@ func (t *globTool) Execute(ctx context.Context, callID string, args json.RawMess
 		return nil
 	})
 	if err != nil {
-		return textResult("error: " + err.Error()), nil
+		return fileAccessError(ctx, err)
 	}
 	if len(matches) == 0 {
 		return textResult("no matches"), nil

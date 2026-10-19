@@ -111,7 +111,7 @@ type Options struct {
 	StreamOptions llm.StreamOptions
 	SteeringMode  QueueMode
 	FollowUpMode  QueueMode
-	// Permission 为 nil 时不启用权限评估，保持库嵌入的原有行为。
+	// Permission 为 nil 时普通工具不启用权限评估；ToolCallPreparer 工具仍使用默认策略。
 	Permission permission.Evaluator
 	// MaxTurns 限制每次 Prompt 的 LLM 响应次数；<=0 表示不限制。
 	MaxTurns int

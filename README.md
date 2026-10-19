@@ -59,7 +59,7 @@ go run ./cmd/goagent -repl
 
 ## Permissions
 
-默认 CLI 启用权限控制：`read` / `ls` / `grep` / `glob` 自动允许，`write` / `edit` / `multi_edit` / `bash` 默认需要审批。TUI 中按 `y` 允许、`n` 拒绝；REPL 中直接回答提示。TUI 还可用 `Shift+Tab` 在 `default → acceptEdits → plan` 间循环，状态栏以 `perm:<mode>` 显示当前模式；`bypass` 和 `dontAsk` 只能由启动参数设置，从这些模式按 `Shift+Tab` 会回到 `default`。可用模式：
+默认 CLI 启用工作区约束和权限控制：工作区内 `read` / `ls` / `grep` / `glob` 自动允许，`write` / `edit` / `multi_edit` / `bash` 默认需要审批。工作区外读取必须单次审批，文件写入直接拒绝。TUI 中按 `y` 允许、`n` 拒绝；REPL 中直接回答提示。TUI 还可用 `Shift+Tab` 在 `default → acceptEdits → plan` 间循环，状态栏以 `perm:<mode>` 显示当前模式；`bypass` 和 `dontAsk` 只能由启动参数设置，从这些模式按 `Shift+Tab` 会回到 `default`。可用模式：
 
 - `default`：只读工具自动允许，其他工具按规则或审批结果执行。
 - `acceptEdits`：额外自动允许 `write` / `edit` / `multi_edit`。
@@ -76,7 +76,33 @@ go run ./cmd/goagent -yes -p "修改文件并运行测试"
 
 `-allow` / `-deny` 支持重复传入或逗号分隔，规则为精确工具名或 `*`。print 模式不会隐式等待 stdin；需要写文件或执行 Bash 时，必须通过 `-yes`、`-allow` 或相应权限模式显式放权。
 
-作为库嵌入时，`agent.Options.Permission` 为 nil 表示不启用权限评估，保持原有行为；传入 `&permission.Policy` 或自定义 `permission.Evaluator` 即可启用。权限系统不等于容器沙箱。
+作为库嵌入时，普通工具的 `agent.Options.Permission` 为 nil 表示不启用权限评估，保持原有行为；传入 `&permission.Policy` 或自定义 `permission.Evaluator` 即可启用。工作区工具即使未配置 Evaluator，也会执行默认权限检查。权限系统不等于容器沙箱。
+
+### 工作区目录
+
+工作区默认为启动目录，可通过 `-workspace /path/to/project` 指定。相对文件路径和 shell 工作目录都以该目录为基准；工作区内的正常符号链接可用，指向外部的链接按真实目标判定权限。
+
+| 文件访问 | 行为 |
+|---|---|
+| 工作区内读取、列目录、搜索 | 按现有只读规则自动允许 |
+| 工作区内写入 | 按当前模式、规则或审批执行 |
+| 工作区外读取、列目录、搜索 | 必须单次审批，`plan`、`bypass`、`-yes`、`-allow read` 不能自动放行 |
+| 工作区外文件写入 | 所有模式均拒绝 |
+| `dontAsk` 或 print 模式的工作区外读取 | 拒绝，不等待审批 |
+
+目录审批只覆盖被批准目录的真实子树；递归搜索不会读取指向授权范围外的链接。审批绑定本次解析出的目标，之后替换符号链接不能扩大授权范围。TUI 在可滚动轨迹中展示完整审批路径，REPL 展示完整路径和参数。
+
+库嵌入可显式创建受限工具集：
+
+```go
+workspace, err := tools.NewWorkspace(projectDir)
+if err != nil { /* 处理错误 */ }
+defer workspace.Close() // 所有 Agent 调用结束后关闭
+toolList := workspace.CodingTools() // 或 workspace.ReadOnlyTools()
+// 将 toolList 传给 agent.Options.Tools，并配置 Permission/Approver。
+```
+
+底层 `tools.CodingTools()` 和单独的 `tools.Read()` 等构造函数保留原有路径行为。安全目录访问目前支持 Unix，其他平台会明确返回不支持错误；复用已有 `golang.org/x/sys/unix` 提供 Go 1.23 所需的目录句柄操作。特殊文件和硬链接写入会被拒绝。`bash` 仅固定工作目录，仍能访问宿主权限允许的其他路径；需要对 shell 强制隔离时应使用容器或操作系统沙箱。
 
 ## 运行预算与终止原因
 

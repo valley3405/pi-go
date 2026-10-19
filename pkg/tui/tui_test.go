@@ -672,6 +672,23 @@ func TestPermissionModeShortcut(t *testing.T) {
 	}
 }
 
+func TestOutsideApprovalShowsFullReasonOnce(t *testing.T) {
+	m := New(newTestHarness(t, nil, false))
+	reason := "read outside workspace: /" + strings.Repeat("long-path/", 30) + "target.txt"
+	request := approvalRequestMsg{
+		request:  permission.Request{ToolName: "read", Args: json.RawMessage(`{"path":"link"}`), ToolDecision: permission.RequiredApproval(reason)},
+		response: make(chan permission.Decision, 1),
+	}
+	m, _ = updateModel(t, m, request)
+	if len(m.entries) != 1 || m.entries[0].text != reason {
+		t.Fatalf("full approval target missing: %+v", m.entries)
+	}
+	m, _ = updateModel(t, m, approvalRequestMsg{request: permission.Request{ToolName: "bash"}, response: make(chan permission.Decision, 1)})
+	if len(m.entries) != 1 {
+		t.Fatal("queued approval duplicated current target")
+	}
+}
+
 func TestPermissionModeShortcutWithoutPolicy(t *testing.T) {
 	m := New(newTestHarness(t, nil, false))
 	m, _ = updateModel(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})

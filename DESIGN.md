@@ -16,7 +16,7 @@ pi 的核心思想：**分层解耦 + 事件驱动 + 最小内核**。goagent �
 | `pi-tui` | `pkg/tui` + `cmd/goagent` | Bubble Tea 全屏 TUI；保留 stdlib 行式 REPL 作为回退 |
 | RPC / server / client | 路线图 | 暂不进内核 |
 
-关键约束：核心 LLM、agent、harness 与工具层只用 Go 标准库（`net/http` + SSE 手工解析、`encoding/json`、`os/exec`）；TUI 使用 Bubble Tea/Bubbles/Lip Gloss，并固定兼容 Go 1.23 的 v1 版本。
+关键约束：核心 LLM、agent、harness 使用 Go 标准库（`net/http` + SSE 手工解析、`encoding/json`、`os/exec`）；工具层的安全目录访问复用已有 `golang.org/x/sys/unix`，以在 Go 1.23 上支持基于目录句柄的访问；TUI 使用 Bubble Tea/Bubbles/Lip Gloss，并固定兼容 Go 1.23 的 v1 版本。
 
 ## 2. 分层结构
 
@@ -162,12 +162,14 @@ type AgentTool interface {
 
 ### 4.5 权限评估（pkg/permission）
 
-- `Options.Permission` 接收独立 `permission.Evaluator`；为 nil 时不评估，保持已有库嵌入行为，默认 CLI 则显式启用 `permission.Policy`。
+- `Options.Permission` 接收独立 `permission.Evaluator`；为 nil 时普通工具不评估，保持已有库嵌入行为；实现 `ToolCallPreparer` 的工作区工具使用默认策略而非跳过检查，默认 CLI 显式启用 `permission.Policy`。
 - `Policy` 支持 default / acceptEdits / plan / dontAsk / bypassPermissions，以及 `*` 或精确工具名规则；deny 规则和工具硬拒绝优先于所有自动允许。
 - `SetMode` / `CurrentMode` 支持运行时模式切换；`Evaluate` 在读锁下快照配置后释放锁，审批等待期间不持锁，可与 TUI 和工具 goroutine 并发执行。
 - 工具通过可选接口提供只读属性和权限自检；未提供的自定义工具按非只读、需要审批处理。只读工具自动允许，write/edit/bash 默认进入宿主审批。
 - 权限拒绝、审批中止和 context 取消都生成配对的 error ToolResult；权限评估先于 `BeforeToolCall`，审批器只负责 allow/deny，异常或空决策一律 fail closed。
 - 权限层不是 sandbox；高权限执行仍建议使用容器或受限用户。
+- 默认 CLI 使用 `tools.Workspace.CodingTools()`，根目录由 `-workspace`（默认启动目录）确定。文件调用在权限评估前通过 `ToolCallPreparer` 绑定解析后的目标和参数，读取外部目标返回 `RequiredApproval`；此决策不能被只读、allow 规则或 bypass 自动允许，dontAsk/print 拒绝。外部写入直接拒绝，内部写入遵循原有模式。额外目录的审批仅作用于当前调用，不缓存为全局授权。
+- Unix 文件访问逐级使用目录句柄和 `O_NOFOLLOW`，安全打开时不重新跟随链接；父目录创建也经相同路径。递归搜索在授权树中安全打开每个目录和文件，跳过逃逸链接。特殊文件拒绝读取/写入，硬链接拒绝写入。其他平台明确报错，不退回不安全检查；bash 仅设置工作目录，不提供进程沙箱。底层无 Workspace 的工具构造保留兼容行为。
 
 ### 4.6 状态与并发
 

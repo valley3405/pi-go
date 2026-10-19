@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"goagent/pkg/agent"
@@ -65,9 +64,9 @@ func (t *multiEditTool) Execute(ctx context.Context, callID string, args json.Ra
 	FileMutationQueue.Lock()
 	defer FileMutationQueue.Unlock()
 
-	data, err := os.ReadFile(p.Path)
+	data, err := readFile(ctx, p.Path)
 	if err != nil {
-		return textResult("error: " + err.Error()), nil
+		return fileAccessError(ctx, err)
 	}
 	content := normalizeCRLF(string(data))
 	totalReplacements := 0
@@ -95,8 +94,8 @@ func (t *multiEditTool) Execute(ctx context.Context, callID string, args json.Ra
 			totalReplacements++
 		}
 	}
-	if err := os.WriteFile(p.Path, []byte(content), 0o644); err != nil {
-		return textResult("error: " + err.Error()), nil
+	if err := writeFile(ctx, p.Path, []byte(content), false); err != nil {
+		return fileAccessError(ctx, err)
 	}
 	return textResult(fmt.Sprintf("edited %s (%d edit(s), %d replacement(s))", p.Path, len(p.Edits), totalReplacements)), nil
 }

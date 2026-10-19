@@ -96,6 +96,33 @@ func TestParseMode(t *testing.T) {
 	}
 }
 
+func TestRequiredApprovalOverridesAutomaticAllow(t *testing.T) {
+	request := permission.Request{ToolName: "read", ReadOnly: true, ToolDecision: permission.RequiredApproval("outside workspace")}
+	for _, mode := range []permission.Mode{permission.ModeDefault, permission.ModeAcceptEdits, permission.ModePlan, permission.ModeBypass, permission.ModeDontAsk} {
+		t.Run(string(mode), func(t *testing.T) {
+			calls := 0
+			policy := &permission.Policy{Mode: mode, AllowedTools: []string{"*"}, Approver: func(context.Context, permission.Request) permission.Decision { calls++; return permission.Allowed() }}
+			decision := policy.Evaluate(context.Background(), request)
+			if mode == permission.ModeDontAsk {
+				if decision.Behavior != permission.Deny || calls != 0 {
+					t.Fatalf("decision=%+v calls=%d", decision, calls)
+				}
+			} else if decision.Behavior != permission.Allow || calls != 1 {
+				t.Fatalf("decision=%+v calls=%d", decision, calls)
+			}
+			policy.DisallowedTools = []string{"read"}
+			if policy.Evaluate(context.Background(), request).Behavior != permission.Deny {
+				t.Fatal("required approval bypassed deny")
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	policy := &permission.Policy{Approver: func(context.Context, permission.Request) permission.Decision { cancel(); return permission.Allowed() }}
+	if policy.Evaluate(ctx, request).Behavior != permission.Deny {
+		t.Fatal("approval after cancellation was allowed")
+	}
+}
+
 func TestPolicySetMode(t *testing.T) {
 	policy := &permission.Policy{}
 	if mode := policy.CurrentMode(); mode != permission.ModeDefault {

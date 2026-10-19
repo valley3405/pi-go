@@ -71,3 +71,15 @@ func TestNonInteractiveApprover(t *testing.T) {
 		t.Fatalf("unexpected print-mode decision: %+v", decision)
 	}
 }
+
+func TestPrintCannotBypassOutsideReadApproval(t *testing.T) {
+	policy, err := newPermissionPolicy("default", true, []string{"read"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.Approver = nonInteractiveApprover
+	decision := policy.Evaluate(context.Background(), permission.Request{ToolName: "read", ReadOnly: true, ToolDecision: permission.RequiredApproval("read outside workspace: /outside/file")})
+	if decision.Behavior != permission.Deny || !strings.Contains(decision.Reason, "outside workspace") || strings.Contains(decision.Reason, "use -yes") {
+		t.Fatalf("decision=%+v", decision)
+	}
+}

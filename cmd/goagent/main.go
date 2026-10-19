@@ -37,6 +37,7 @@ func main() {
 		providerID     = flag.String("provider", envOr("GOAGENT_PROVIDER", ""), "provider id: openai-compatible | anthropic")
 		modelID        = flag.String("model", envOr("GOAGENT_MODEL", ""), "model id, e.g. gpt-4o-mini or claude-sonnet-4-5")
 		baseURL        = flag.String("base-url", envOr("OPENAI_BASE_URL", "https://api.openai.com/v1"), "base URL for openai-compatible provider")
+		workspaceDir   = flag.String("workspace", ".", "workspace directory for file tools and shell working directory")
 		sessionDir     = flag.String("session-dir", defaultSessionDir(), "directory for session files")
 		noSession      = flag.Bool("no-session", false, "disable session persistence")
 		contextSize    = flag.Int("context", 128000, "context window size for auto-compaction (0 = off)")
@@ -70,11 +71,21 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(2)
 	}
+	workspace, err := tools.NewWorkspace(*workspaceDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error: workspace:", err)
+		os.Exit(2)
+	}
+	defer workspace.Close()
+	if err := os.Chdir(workspace.Root()); err != nil {
+		fmt.Fprintln(os.Stderr, "error: workspace:", err)
+		os.Exit(2)
+	}
 
 	a := agent.New(agent.Options{
 		SystemPrompt:       systemPrompt,
 		Model:              model,
-		Tools:              tools.CodingTools(),
+		Tools:              workspace.CodingTools(),
 		StreamFn:           registry.StreamSimple,
 		Permission:         policy,
 		MaxTurns:           *maxTurns,

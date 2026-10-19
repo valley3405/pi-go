@@ -21,7 +21,7 @@ type BashResultDetails struct {
 
 // Bash 执行 shell 命令（对应 pi 的 bash 工具）：超时 + 进程组清理，最终输出由 Agent 统一治理。
 func Bash() agent.AgentTool {
-	return &bashTool{baseTool{
+	return &bashTool{baseTool: baseTool{
 		name: "bash",
 		tool: llm.Tool{
 			Name:        "bash",
@@ -38,7 +38,10 @@ func Bash() agent.AgentTool {
 	}}
 }
 
-type bashTool struct{ baseTool }
+type bashTool struct {
+	baseTool
+	dir string
+}
 
 func (t *bashTool) Execute(ctx context.Context, callID string, args json.RawMessage, onUpdate func(agent.ToolResult)) (agent.ToolResult, error) {
 	var p struct {
@@ -59,6 +62,7 @@ func (t *bashTool) Execute(ctx context.Context, callID string, args json.RawMess
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", p.Command)
+	cmd.Dir = t.dir
 
 	// 防卡住三件套（修复"管道残留进程拖住 stdout 导致 Wait 不返回"）：
 	// 1. Setpgid：子进程独立成组，后台/管道孙进程都在组内；

@@ -479,7 +479,18 @@ func runOneToolCall(ctx context.Context, curCtx *Context, msg AgentMessage, tc *
 	if ctx.Err() != nil {
 		return finalizedCall{result: ErrorToolResult("Operation aborted"), isError: true}, nil
 	}
-	if cfg.permission != nil {
+	evaluator := cfg.permission
+	if preparer, ok := tool.(ToolCallPreparer); ok {
+		var err error
+		tool, err = preparer.PrepareCall(ctx, tc.Arguments)
+		if err != nil {
+			return finalizedCall{result: ErrorToolResult(err.Error()), isError: true}, nil
+		}
+		if evaluator == nil {
+			evaluator = &permission.Policy{}
+		}
+	}
+	if evaluator != nil {
 		req := permission.Request{ToolName: tc.Name, Args: tc.Arguments, ToolDecision: permission.AskUser("approve " + tc.Name + "?")}
 		if t, ok := tool.(ReadOnlyTool); ok {
 			req.ReadOnly = t.IsReadOnly(tc.Arguments)
@@ -487,7 +498,7 @@ func runOneToolCall(ctx context.Context, curCtx *Context, msg AgentMessage, tc *
 		if t, ok := tool.(PermissionCheckedTool); ok {
 			req.ToolDecision = t.CheckPermissions(ctx, tc.Arguments)
 		}
-		decision := cfg.permission.Evaluate(ctx, req)
+		decision := evaluator.Evaluate(ctx, req)
 		if decision.Behavior != permission.Allow {
 			reason := decision.Reason
 			if reason == "" {

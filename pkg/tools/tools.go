@@ -62,12 +62,12 @@ func intProp(desc string) map[string]any {
 
 func normalizeCRLF(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
 
-// CodingTools 返回完整编码工具集（对应 pi 的 createCodingTools）。
+// CodingTools 返回未限制路径的底层工具集（兼容库嵌入）；默认 CLI 使用 Workspace.CodingTools。
 func CodingTools() []agent.AgentTool {
 	return []agent.AgentTool{Bash(), Read(), Write(), Edit(), MultiEdit(), LS(), Grep(), Glob()}
 }
 
-// ReadOnlyTools 返回只读工具集（对应 pi 的 createReadOnlyTools）。
+// ReadOnlyTools 返回未限制路径的底层只读工具集；受限版本见 Workspace.ReadOnlyTools。
 func ReadOnlyTools() []agent.AgentTool {
 	return []agent.AgentTool{Read(), LS(), Grep(), Glob()}
 }

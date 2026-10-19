@@ -76,6 +76,12 @@ type PermissionCheckedTool interface {
 	CheckPermissions(ctx context.Context, args json.RawMessage) permission.Decision
 }
 
+// ToolCallPreparer 绑定一次调用的访问目标，避免审批后路径或符号链接改变授权范围。
+// 返回的工具仅用于当前调用；即使未配置 Evaluator，也按默认权限策略检查。
+type ToolCallPreparer interface {
+	PrepareCall(ctx context.Context, args json.RawMessage) (AgentTool, error)
+}
+
 // TerminationReason 说明一次 agent run 的结束原因。
 type TerminationReason string
 

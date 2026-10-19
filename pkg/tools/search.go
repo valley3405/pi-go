@@ -42,13 +42,17 @@ func (t *lsTool) Execute(ctx context.Context, callID string, args json.RawMessag
 	if p.Path == "" {
 		p.Path = "."
 	}
-	entries, err := os.ReadDir(p.Path)
+	entries, err := readDirectory(ctx, p.Path)
 	if err != nil {
-		return textResult("error: " + err.Error()), nil
+		return fileAccessError(ctx, err)
 	}
 	var b strings.Builder
 	for _, e := range entries {
-		info, _ := e.Info()
+		if e.Type()&os.ModeSymlink != 0 {
+			fmt.Fprintf(&b, "l %s\n", e.Name())
+			continue
+		}
+		info, _ := statFile(ctx, filepath.Join(p.Path, e.Name()))
 		if e.IsDir() {
 			fmt.Fprintf(&b, "d %s/\n", e.Name())
 		} else if info != nil {
@@ -122,14 +126,17 @@ func (t *grepTool) Execute(ctx context.Context, callID string, args json.RawMess
 	matches := 0
 	truncated := false
 
-	info, err := os.Stat(p.Path)
+	info, err := statFile(ctx, p.Path)
 	if err != nil {
-		return textResult("error: " + err.Error()), nil
+		return fileAccessError(ctx, err)
 	}
 	if !info.IsDir() {
-		matches, truncated = grepFile(p.Path, re, p.MaxResults, &b)
+		matches, truncated = grepFile(ctx, p.Path, re, p.MaxResults, &b)
 	} else {
-		_ = filepath.WalkDir(p.Path, func(path string, d os.DirEntry, err error) error {
+		walkErr := walkDirectory(ctx, p.Path, func(path string, d os.DirEntry, err error) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if err != nil || truncated {
 				if truncated {
 					return filepath.SkipAll
@@ -145,11 +152,14 @@ func (t *grepTool) Execute(ctx context.Context, callID string, args json.RawMess
 			if includeRe != nil && !includeRe.MatchString(d.Name()) {
 				return nil
 			}
-			n, full := grepFile(path, re, p.MaxResults-matches, &b)
+			n, full := grepFile(ctx, path, re, p.MaxResults-matches, &b)
 			matches += n
 			truncated = truncated || full
 			return nil
 		})
+		if walkErr != nil {
+			return agent.ToolResult{}, walkErr
+		}
 	}
 	if truncated {
 		fmt.Fprintf(&b, "(truncated at %d matches)\n", p.MaxResults)
@@ -160,11 +170,11 @@ func (t *grepTool) Execute(ctx context.Context, callID string, args json.RawMess
 	return textResult(b.String()), nil
 }
 
-func grepFile(path string, re *regexp.Regexp, remaining int, b *strings.Builder) (int, bool) {
+func grepFile(ctx context.Context, path string, re *regexp.Regexp, remaining int, b *strings.Builder) (int, bool) {
 	if remaining <= 0 {
 		return 0, true
 	}
-	f, err := os.Open(path)
+	f, err := openFile(ctx, path)
 	if err != nil {
 		return 0, false
 	}
@@ -174,6 +184,9 @@ func grepFile(path string, re *regexp.Regexp, remaining int, b *strings.Builder)
 	line := 0
 	n := 0
 	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return n, false
+		}
 		line++
 		text := scanner.Text()
 		if re.MatchString(text) {

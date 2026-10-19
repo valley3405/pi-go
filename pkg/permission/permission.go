@@ -22,6 +22,8 @@ const (
 type Decision struct {
 	Behavior Behavior
 	Reason   string
+	// RequireApproval 禁止只读、allow 规则和 bypass 自动放行敏感访问。
+	RequireApproval bool
 }
 
 // Allowed 构造允许决策。
@@ -37,6 +39,11 @@ func Denied(reason string) Decision {
 
 // AskUser 构造需要用户审批的决策。
 func AskUser(reason string) Decision { return Decision{Behavior: Ask, Reason: reason} }
+
+// RequiredApproval 构造不能被自动允许规则覆盖的单次审批。
+func RequiredApproval(reason string) Decision {
+	return Decision{Behavior: Ask, Reason: reason, RequireApproval: true}
+}
 
 // Mode 控制权限管线的自动允许和审批行为。
 type Mode string
@@ -136,15 +143,22 @@ func (p *Policy) Evaluate(ctx context.Context, req Request) Decision {
 	}
 	switch mode {
 	case ModeBypass:
-		return Allowed()
+		if !req.ToolDecision.RequireApproval {
+			return Allowed()
+		}
 	case ModePlan:
 		if !req.ReadOnly {
 			return Denied("plan mode permits read-only tools only")
 		}
-		return Allowed()
+		if !req.ToolDecision.RequireApproval {
+			return Allowed()
+		}
 	case ModeDefault, ModeAcceptEdits, ModeDontAsk:
 	default:
 		return Denied(fmt.Sprintf("unknown permission mode %q", mode))
+	}
+	if req.ToolDecision.RequireApproval {
+		return approve(ctx, req, mode, approver)
 	}
 
 	if matchRule(allowedTools, req.ToolName) {
@@ -159,6 +173,13 @@ func (p *Policy) Evaluate(ctx context.Context, req Request) Decision {
 	if req.ToolDecision.Behavior == Allow {
 		return Allowed()
 	}
+	return approve(ctx, req, mode, approver)
+}
+
+func approve(ctx context.Context, req Request, mode Mode, approver Approver) Decision {
+	if ctx.Err() != nil {
+		return Denied("operation aborted")
+	}
 	if mode == ModeDontAsk {
 		return Denied(fmt.Sprintf("tool %q requires approval but mode is dontAsk", req.ToolName))
 	}
@@ -166,6 +187,9 @@ func (p *Policy) Evaluate(ctx context.Context, req Request) Decision {
 		return Denied(fmt.Sprintf("tool %q requires approval but no approval handler is configured", req.ToolName))
 	}
 	decision := approver(ctx, req)
+	if ctx.Err() != nil {
+		return Denied("operation aborted")
+	}
 	switch decision.Behavior {
 	case Allow:
 		return Allowed()

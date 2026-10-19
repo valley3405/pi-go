@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"goagent/pkg/permission"
 )
@@ -38,11 +39,18 @@ func newPermissionPolicy(mode string, yes bool, allowed, denied []string) (*perm
 }
 
 func terminalApprover(reader *bufio.Reader) permission.Approver {
+	var mu sync.Mutex
 	return func(ctx context.Context, req permission.Request) permission.Decision {
+		mu.Lock()
+		defer mu.Unlock()
 		if err := ctx.Err(); err != nil {
 			return permission.Denied("operation aborted")
 		}
-		fmt.Printf("\nAllow %s %s ? [y/N] ", req.ToolName, truncate(string(req.Args), 120))
+		if req.ToolDecision.RequireApproval {
+			fmt.Printf("\n%s\nAllow %s %s ? [y/N] ", req.ToolDecision.Reason, req.ToolName, string(req.Args))
+		} else {
+			fmt.Printf("\nAllow %s %s ? [y/N] ", req.ToolName, truncate(string(req.Args), 120))
+		}
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			return permission.Denied("approval input unavailable")
@@ -59,6 +67,9 @@ func terminalApprover(reader *bufio.Reader) permission.Approver {
 	}
 }
 
-func nonInteractiveApprover(context.Context, permission.Request) permission.Decision {
+func nonInteractiveApprover(_ context.Context, req permission.Request) permission.Decision {
+	if req.ToolDecision.RequireApproval {
+		return permission.Denied("approval is unavailable in print mode: " + req.ToolDecision.Reason)
+	}
 	return permission.Denied("approval is unavailable in print mode; use -yes, -allow, or an appropriate -permission mode to grant access explicitly")
 }

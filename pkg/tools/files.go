@@ -2,11 +2,9 @@ package tools
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"goagent/pkg/agent"
@@ -52,9 +50,9 @@ func (t *readTool) Execute(ctx context.Context, callID string, args json.RawMess
 		p.Limit = 2000
 	}
 
-	f, err := os.Open(p.Path)
+	f, err := openFile(ctx, p.Path)
 	if err != nil {
-		return textResult("error: " + err.Error()), nil
+		return fileAccessError(ctx, err)
 	}
 	defer f.Close()
 
@@ -64,6 +62,9 @@ func (t *readTool) Execute(ctx context.Context, callID string, args json.RawMess
 	line := 0
 	read := 0
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return agent.ToolResult{}, err
+		}
 		line++
 		if line < p.Offset {
 			continue
@@ -115,21 +116,10 @@ func (t *writeTool) Execute(ctx context.Context, callID string, args json.RawMes
 	FileMutationQueue.Lock()
 	defer FileMutationQueue.Unlock()
 
-	if err := os.MkdirAll(dirOf(p.Path), 0o755); err != nil {
-		return textResult("error: " + err.Error()), nil
-	}
-	if err := os.WriteFile(p.Path, []byte(p.Content), 0o644); err != nil {
-		return textResult("error: " + err.Error()), nil
+	if err := writeFile(ctx, p.Path, []byte(p.Content), true); err != nil {
+		return fileAccessError(ctx, err)
 	}
 	return textResult(fmt.Sprintf("wrote %d bytes to %s", len(p.Content), p.Path)), nil
-}
-
-func dirOf(path string) string {
-	idx := strings.LastIndex(path, "/")
-	if idx <= 0 {
-		return "."
-	}
-	return path[:idx]
 }
 
 // Edit 精确字符串替换（对应 pi 的 edit 工具语义：old_string 必须唯一匹配）。
@@ -173,9 +163,9 @@ func (t *editTool) Execute(ctx context.Context, callID string, args json.RawMess
 	FileMutationQueue.Lock()
 	defer FileMutationQueue.Unlock()
 
-	data, err := os.ReadFile(p.Path)
+	data, err := readFile(ctx, p.Path)
 	if err != nil {
-		return textResult("error: " + err.Error()), nil
+		return fileAccessError(ctx, err)
 	}
 	content := normalizeCRLF(string(data))
 	old := normalizeCRLF(p.OldString)
@@ -195,10 +185,8 @@ func (t *editTool) Execute(ctx context.Context, callID string, args json.RawMess
 	} else {
 		updated = strings.Replace(content, old, newStr, 1)
 	}
-	if err := os.WriteFile(p.Path, []byte(updated), 0o644); err != nil {
-		return textResult("error: " + err.Error()), nil
+	if err := writeFile(ctx, p.Path, []byte(updated), false); err != nil {
+		return fileAccessError(ctx, err)
 	}
 	return textResult(fmt.Sprintf("edited %s (%d replacement(s))", p.Path, map[bool]int{true: count, false: 1}[p.ReplaceAll])), nil
 }
-
-var _ = bytes.MinRead // 占位避免未用导入
