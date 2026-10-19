@@ -23,14 +23,14 @@ func TestRuleList(t *testing.T) {
 }
 
 func TestNewPermissionPolicy(t *testing.T) {
-	policy, err := newPermissionPolicy("acceptEdits", false, []string{"read"}, []string{"bash"})
+	policy, err := newPermissionPolicy("acceptEdits", false, []string{"read"}, []string{"bash"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if policy.Mode != permission.ModeAcceptEdits || len(policy.AllowedTools) != 1 || len(policy.DisallowedTools) != 1 {
 		t.Fatalf("unexpected policy: %+v", policy)
 	}
-	policy, err = newPermissionPolicy("plan", true, nil, []string{"bash"})
+	policy, err = newPermissionPolicy("plan", true, nil, []string{"bash"}, []string{`go test( .*)?`}, []string{`rm\s+-rf`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,8 +40,14 @@ func TestNewPermissionPolicy(t *testing.T) {
 	if decision := policy.Evaluate(context.Background(), permission.Request{ToolName: "bash"}); decision.Behavior != permission.Deny {
 		t.Fatalf("deny rule should beat -yes: %+v", decision)
 	}
-	if _, err := newPermissionPolicy("invalid", false, nil, nil); err == nil {
+	if len(policy.AllowedCommands) != 1 || len(policy.DeniedCommands) != 1 {
+		t.Fatalf("command rules missing: %+v", policy)
+	}
+	if _, err := newPermissionPolicy("invalid", false, nil, nil, nil, nil); err == nil {
 		t.Fatal("expected invalid mode error")
+	}
+	if _, err := newPermissionPolicy("default", false, nil, nil, []string{"["}, nil); err == nil || !strings.Contains(err.Error(), "allow command rule") {
+		t.Fatalf("expected invalid command rule error, got %v", err)
 	}
 }
 
@@ -74,7 +80,7 @@ func TestNonInteractiveApprover(t *testing.T) {
 }
 
 func TestPrintCannotBypassOutsideReadApproval(t *testing.T) {
-	policy, err := newPermissionPolicy("default", true, []string{"read"}, nil)
+	policy, err := newPermissionPolicy("default", true, []string{"read"}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,5 +88,18 @@ func TestPrintCannotBypassOutsideReadApproval(t *testing.T) {
 	decision := policy.Evaluate(context.Background(), permission.Request{ToolName: "read", ReadOnly: true, ToolDecision: permission.RequiredApproval("read outside workspace: /outside/file")})
 	if decision.Behavior != permission.Deny || !strings.Contains(decision.Reason, "outside workspace") || strings.Contains(decision.Reason, "use -yes") {
 		t.Fatalf("decision=%+v", decision)
+	}
+}
+
+func TestCommandRuleListDoesNotSplitCommas(t *testing.T) {
+	var rules commandRuleList
+	if err := rules.Set(`^go test -run 'Test(A|B),TestC$'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := rules.Set(`^printf "hello"$`); err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 2 || !strings.Contains(rules[0], "TestC") {
+		t.Fatalf("command rules split incorrectly: %v", rules)
 	}
 }

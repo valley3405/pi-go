@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -96,6 +97,10 @@ type Policy struct {
 	Mode            Mode
 	AllowedTools    []string
 	DisallowedTools []string
+	// AllowedCommands 是完整命令正则；DeniedCommands 是部分匹配正则。
+	// 含 shell 控制符、重定向或命令替换的命令不会被 allow 规则自动放行。
+	AllowedCommands []string
+	DeniedCommands  []string
 	Approver        Approver
 }
 
@@ -122,17 +127,31 @@ func (p *Policy) CurrentMode() Mode {
 	return mode
 }
 
-// Evaluate 按 deny 优先的顺序评估权限。规则支持 * 或精确工具名。
+// Evaluate 按 deny 优先的顺序评估权限。工具规则支持 * 或精确工具名；
+// Bash 命令规则中 allow 为完整匹配，deny 为部分匹配。
 func (p *Policy) Evaluate(ctx context.Context, req Request) Decision {
 	p.mu.RLock()
 	mode := p.Mode
 	allowedTools := append([]string(nil), p.AllowedTools...)
 	disallowedTools := append([]string(nil), p.DisallowedTools...)
+	allowedCommands := append([]string(nil), p.AllowedCommands...)
+	deniedCommands := append([]string(nil), p.DeniedCommands...)
 	approver := p.Approver
 	p.mu.RUnlock()
 
 	if matchRule(disallowedTools, req.ToolName) {
 		return Denied(fmt.Sprintf("tool %q is disallowed by policy", req.ToolName))
+	}
+	commandAllowed := false
+	if command, isBash := bashCommand(req); isBash {
+		denied, allowed, err := matchCommandRules(command, allowedCommands, deniedCommands)
+		if err != nil {
+			return Denied(err.Error())
+		}
+		if denied {
+			return Denied(fmt.Sprintf("bash command is disallowed by policy: %q", command))
+		}
+		commandAllowed = allowed
 	}
 	if req.ToolDecision.Behavior == Deny {
 		return Denied(req.ToolDecision.Reason)
@@ -165,6 +184,9 @@ func (p *Policy) Evaluate(ctx context.Context, req Request) Decision {
 		return Allowed()
 	}
 	if mode == ModeAcceptEdits && isEditTool(req.ToolName) {
+		return Allowed()
+	}
+	if commandAllowed {
 		return Allowed()
 	}
 	if req.ReadOnly {
@@ -212,4 +234,112 @@ func matchRule(rules []string, toolName string) bool {
 
 func isEditTool(toolName string) bool {
 	return strings.EqualFold(toolName, "write") || strings.EqualFold(toolName, "edit") || strings.EqualFold(toolName, "multi_edit")
+}
+
+// ValidateCommandRules 在启动时校验 Bash 命令规则。
+func ValidateCommandRules(allowed, denied []string) error {
+	for i, pattern := range denied {
+		if strings.TrimSpace(pattern) == "" {
+			continue
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("deny command rule %d: %w", i+1, err)
+		}
+	}
+	for i, pattern := range allowed {
+		if strings.TrimSpace(pattern) == "" {
+			continue
+		}
+		if _, err := regexp.Compile(anchorAllowCommand(pattern)); err != nil {
+			return fmt.Errorf("allow command rule %d: %w", i+1, err)
+		}
+	}
+	return nil
+}
+
+func bashCommand(req Request) (string, bool) {
+	if !strings.EqualFold(req.ToolName, "bash") {
+		return "", false
+	}
+	var args struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(req.Args, &args); err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(args.Command), true
+}
+
+func matchCommandRules(command string, allowed, denied []string) (bool, bool, error) {
+	for i, pattern := range denied {
+		if strings.TrimSpace(pattern) == "" {
+			continue
+		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return false, false, fmt.Errorf("invalid deny command rule %d: %w", i+1, err)
+		}
+		if re.MatchString(command) {
+			return true, false, nil
+		}
+	}
+	if hasUnsafeCommandSyntax(command) {
+		return false, false, nil
+	}
+	for i, pattern := range allowed {
+		if strings.TrimSpace(pattern) == "" {
+			continue
+		}
+		re, err := regexp.Compile(anchorAllowCommand(pattern))
+		if err != nil {
+			return false, false, fmt.Errorf("invalid allow command rule %d: %w", i+1, err)
+		}
+		if re.MatchString(command) {
+			return false, true, nil
+		}
+	}
+	return false, false, nil
+}
+
+func hasUnsafeCommandSyntax(command string) bool {
+	var singleQuoted, doubleQuoted, escaped bool
+	for _, r := range command {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if r == '\\' {
+			escaped = true
+			continue
+		}
+		if singleQuoted {
+			if r == '\'' {
+				singleQuoted = false
+			}
+			continue
+		}
+		if r == '\'' {
+			singleQuoted = true
+			continue
+		}
+		if doubleQuoted {
+			if r == '"' {
+				doubleQuoted = false
+				continue
+			}
+			if r == '$' || r == '`' {
+				return true
+			}
+			continue
+		}
+		switch r {
+		case ';', '|', '&', '<', '>', '(', ')', '{', '}', '$', '`', '~', '#', '\n', '\r', '[', ']':
+			return true
+		}
+	}
+	return singleQuoted || doubleQuoted || escaped
+}
+
+func anchorAllowCommand(pattern string) string {
+	return "^(?:" + pattern + ")$"
 }

@@ -33,27 +33,31 @@ Guidelines:
 
 func main() {
 	var (
-		prompt         = flag.String("p", "", "print mode: run once with this prompt and exit")
-		providerID     = flag.String("provider", envOr("GOAGENT_PROVIDER", ""), "provider id: openai-compatible | anthropic")
-		modelID        = flag.String("model", envOr("GOAGENT_MODEL", ""), "model id, e.g. gpt-4o-mini or claude-sonnet-4-5")
-		baseURL        = flag.String("base-url", envOr("OPENAI_BASE_URL", "https://api.openai.com/v1"), "base URL for openai-compatible provider")
-		workspaceDir   = flag.String("workspace", ".", "workspace directory for file tools and shell working directory")
-		sessionDir     = flag.String("session-dir", defaultSessionDir(), "directory for session files")
-		noSession      = flag.Bool("no-session", false, "disable session persistence")
-		contextSize    = flag.Int("context", 128000, "context window size for auto-compaction (0 = off)")
-		permissionMode = flag.String("permission", "default", "permission mode: default | acceptEdits | plan | dontAsk | bypass")
-		maxTurns       = flag.Int("max-turns", 50, "max LLM responses per prompt (0 = unlimited)")
-		maxDuration    = flag.Duration("max-duration", 0, "max wall-clock duration per prompt (0 = unlimited)")
-		toolOutputDir  = flag.String("tool-output-dir", defaultToolOutputDir(), "directory for full oversized tool output (empty = disable spilling)")
-		maxToolOutput  = flag.Int("max-tool-output", agent.DefaultMaxToolOutputChars, "max characters returned to the model per tool result")
-		yes            = flag.Bool("yes", false, "auto-approve tools (deny rules still apply)")
-		repl           = flag.Bool("repl", false, "use the line-oriented REPL instead of the TUI")
-		showVersion    = flag.Bool("version", false, "print version and exit")
-		allowedTools   ruleList
-		deniedTools    ruleList
+		prompt          = flag.String("p", "", "print mode: run once with this prompt and exit")
+		providerID      = flag.String("provider", envOr("GOAGENT_PROVIDER", ""), "provider id: openai-compatible | anthropic")
+		modelID         = flag.String("model", envOr("GOAGENT_MODEL", ""), "model id, e.g. gpt-4o-mini or claude-sonnet-4-5")
+		baseURL         = flag.String("base-url", envOr("OPENAI_BASE_URL", "https://api.openai.com/v1"), "base URL for openai-compatible provider")
+		workspaceDir    = flag.String("workspace", ".", "workspace directory for file tools and shell working directory")
+		sessionDir      = flag.String("session-dir", defaultSessionDir(), "directory for session files")
+		noSession       = flag.Bool("no-session", false, "disable session persistence")
+		contextSize     = flag.Int("context", 128000, "context window size for auto-compaction (0 = off)")
+		permissionMode  = flag.String("permission", "default", "permission mode: default | acceptEdits | plan | dontAsk | bypass")
+		maxTurns        = flag.Int("max-turns", 50, "max LLM responses per prompt (0 = unlimited)")
+		maxDuration     = flag.Duration("max-duration", 0, "max wall-clock duration per prompt (0 = unlimited)")
+		toolOutputDir   = flag.String("tool-output-dir", defaultToolOutputDir(), "directory for full oversized tool output (empty = disable spilling)")
+		maxToolOutput   = flag.Int("max-tool-output", agent.DefaultMaxToolOutputChars, "max characters returned to the model per tool result")
+		yes             = flag.Bool("yes", false, "auto-approve tools (deny rules still apply)")
+		repl            = flag.Bool("repl", false, "use the line-oriented REPL instead of the TUI")
+		showVersion     = flag.Bool("version", false, "print version and exit")
+		allowedTools    ruleList
+		deniedTools     ruleList
+		allowedCommands commandRuleList
+		deniedCommands  commandRuleList
 	)
 	flag.Var(&allowedTools, "allow", "allow a tool name (repeatable or comma-separated)")
 	flag.Var(&deniedTools, "deny", "deny a tool name (repeatable or comma-separated; highest priority)")
+	flag.Var(&allowedCommands, "allow-command", "allow a bash command regex (repeatable; full-command match)")
+	flag.Var(&deniedCommands, "deny-command", "deny a bash command regex (repeatable; partial match, highest priority)")
 	flag.Parse()
 
 	if *showVersion {
@@ -66,7 +70,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(2)
 	}
-	policy, err := newPermissionPolicy(*permissionMode, *yes, allowedTools, deniedTools)
+	policy, err := newPermissionPolicy(*permissionMode, *yes, allowedTools, deniedTools, allowedCommands, deniedCommands)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(2)

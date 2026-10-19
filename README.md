@@ -11,7 +11,7 @@ pkg/llm       统一多供应商 LLM 层：消息模型、流式事件流、Prov
               （OpenAI 兼容 / Anthropic / 测试用 FauxProvider）
 pkg/agent     Agent 运行时：双层循环、steering/follow-up 双队列、
               生命周期事件、运行预算、工具管线与统一输出治理
-pkg/permission 独立权限层：权限模式、allow/deny 规则、交互审批与 deny 优先
+pkg/permission 独立权限层：权限模式、工具/Bash 命令 allow/deny 规则、交互审批与 deny 优先
 pkg/harness   append-only JSONL 树状会话、分支、上下文压缩、
               skills 发现与注入（SKILL.md + frontmatter，gitignore 感知）
 pkg/tools     内置编码工具：bash / read / write / edit / multi_edit / ls / grep / glob
@@ -75,6 +75,22 @@ go run ./cmd/goagent -yes -p "修改文件并运行测试"
 ```
 
 `-allow` / `-deny` 支持重复传入或逗号分隔，规则为精确工具名或 `*`。print 模式不会隐式等待 stdin；需要写文件或执行 Bash 时，必须通过 `-yes`、`-allow` 或相应权限模式显式放权。
+
+### Bash 命令规则
+
+可用 `-allow-command` / `-deny-command` 按正则控制 Bash 命令，规则可重复传入且不会按逗号拆分：
+
+```bash
+go run ./cmd/goagent -allow-command '^go test( .*)?$'
+go run ./cmd/goagent -yes -deny-command 'rm\s+-rf'
+```
+
+- allow 命令规则自动锚定完整命令；命中后免审批。
+- 命令包含 shell 控制符、管道、重定向或命令替换时，即使 allow 正则命中也仍需审批，避免 `go test && rm -rf ...` 被普通规则误放行。
+- deny 命令规则按部分匹配，优先级高于 `-yes`、`bypass`、工具 allow 规则和审批。
+- `plan` 仍禁止全部 Bash；`dontAsk` 和 print 下仅 allow 命中的命令可自动执行。
+
+命令规则不是沙箱，宽正则仍可能带来风险，应尽量缩小范围。
 
 作为库嵌入时，普通工具的 `agent.Options.Permission` 为 nil 表示不启用权限评估，保持原有行为；传入 `&permission.Policy` 或自定义 `permission.Evaluator` 即可启用。工作区工具即使未配置 Evaluator，也会执行默认权限检查。权限系统不等于容器沙箱。
 

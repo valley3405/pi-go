@@ -43,6 +43,17 @@
 
 验收：权限模式与规则组合有表驱动测试；写文件、Bash、只读工具分别覆盖允许、拒绝、审批和 bypass；默认 CLI 不再无提示执行未授权写操作。
 
+### 2.1 增加 Bash 命令级权限规则（已完成）
+
+位置：`pkg/permission`、`cmd/goagent`、`pkg/agent`
+
+- [x] `Policy` 增加 AllowedCommands / DeniedCommands，仅作用于 Bash 的 command 参数。
+- [x] CLI 新增可重复 `-allow-command` / `-deny-command`，正则包含逗号时也不会被拆分。
+- [x] allow 命令规则锚定完整命令，含 shell 控制符、重定向或命令替换的命令仍需审批。
+- [x] deny 命令规则按部分匹配，优先于 `-yes`、bypass、工具 allow 规则和审批。
+- [x] plan 仍禁止 Bash；dontAsk/print 下仅 allow 命中的命令自动执行。
+- [x] 非法规则启动时报错，库调用中 fail closed。
+
 ## P1：核心运行能力
 
 ### 3. 将整批串行调度改为细粒度工具调度

@@ -164,6 +164,7 @@ type AgentTool interface {
 
 - `Options.Permission` 接收独立 `permission.Evaluator`；为 nil 时普通工具不评估，保持已有库嵌入行为；实现 `ToolCallPreparer` 的工作区工具使用默认策略而非跳过检查，默认 CLI 显式启用 `permission.Policy`。
 - `Policy` 支持 default / acceptEdits / plan / dontAsk / bypassPermissions，以及 `*` 或精确工具名规则；deny 规则和工具硬拒绝优先于所有自动允许。
+- Bash 还支持命令正则：allow 自动锚定完整命令，且含 shell 控制符、重定向或命令替换的命令不会自动放行；deny 使用部分匹配并优先于 bypass/`-yes`/审批。
 - `SetMode` / `CurrentMode` 支持运行时模式切换；`Evaluate` 在读锁下快照配置后释放锁，审批等待期间不持锁，可与 TUI 和工具 goroutine 并发执行。
 - 工具通过可选接口提供只读属性和权限自检；未提供的自定义工具按非只读、需要审批处理。只读工具自动允许，write/edit/bash 默认进入宿主审批。
 - 权限拒绝、审批中止和 context 取消都生成配对的 error ToolResult；权限评估先于 `BeforeToolCall`，审批器只负责 allow/deny，异常或空决策一律 fail closed。
@@ -235,7 +236,7 @@ type AgentTool interface {
 - **终止状态**：TUI 在 agent_end 后显示非 completed 原因；REPL/print 通过 printSubscriber 输出原因，print 按 completed=0、timeout=124、aborted=130、其他=1 退出。
 - **print 模式**：`goagent -p "prompt"`，流式输出文本，工具调用打印摘要，退出码反映 TerminationReason。
 - 会话命令：`/help`、`/skills`、`/branch <id>`、`/compact`、`/trace`、`/tree`、`/resume`、`/usage`、`/quit`；`!cmd` 执行 bash 并在当前界面显示输出，不注入模型上下文。
-- 配置：环境变量 `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`GOAGENT_MODEL`、`ANTHROPIC_API_KEY`；会话文件默认 `~/.goagent/sessions/`；权限由 `-permission`、`-yes`、`-allow`、`-deny` 控制；预算由 `-max-turns`（默认 50）和 `-max-duration`（默认关闭）控制；输出由 `-tool-output-dir`（默认 `~/.goagent/tool-output`）和 `-max-tool-output`（默认 30000）控制。
+- 配置：环境变量 `OPENAI_API_KEY`/`OPENAI_BASE_URL`/`GOAGENT_MODEL`、`ANTHROPIC_API_KEY`；会话文件默认 `~/.goagent/sessions/`；权限由 `-permission`、`-yes`、`-allow`、`-deny`、`-allow-command`、`-deny-command` 控制；预算由 `-max-turns`（默认 50）和 `-max-duration`（默认关闭）控制；输出由 `-tool-output-dir`（默认 `~/.goagent/tool-output`）和 `-max-tool-output`（默认 30000）控制。
 
 ## 8. 与 pi 的差异（刻意决策）
 

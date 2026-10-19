@@ -25,7 +25,18 @@ func (r *ruleList) Set(value string) error {
 	return nil
 }
 
-func newPermissionPolicy(mode string, yes bool, allowed, denied []string) (*permission.Policy, error) {
+type commandRuleList []string
+
+func (r *commandRuleList) String() string { return strings.Join(*r, "\n") }
+
+func (r *commandRuleList) Set(value string) error {
+	if value = strings.TrimSpace(value); value != "" {
+		*r = append(*r, value)
+	}
+	return nil
+}
+
+func newPermissionPolicy(mode string, yes bool, allowed, denied, allowedCommands, deniedCommands []string) (*permission.Policy, error) {
 	if yes {
 		mode = string(permission.ModeBypass)
 	}
@@ -33,10 +44,15 @@ func newPermissionPolicy(mode string, yes bool, allowed, denied []string) (*perm
 	if err != nil {
 		return nil, err
 	}
+	if err := permission.ValidateCommandRules(allowedCommands, deniedCommands); err != nil {
+		return nil, err
+	}
 	return &permission.Policy{
 		Mode:            parsed,
 		AllowedTools:    append([]string(nil), allowed...),
 		DisallowedTools: append([]string(nil), denied...),
+		AllowedCommands: append([]string(nil), allowedCommands...),
+		DeniedCommands:  append([]string(nil), deniedCommands...),
 	}, nil
 }
 
