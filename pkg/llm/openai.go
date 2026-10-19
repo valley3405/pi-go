@@ -17,17 +17,17 @@ type OpenAIProvider struct {
 	id      string
 	baseURL string
 	models  []Model
-	client  *http.Client
+	http    providerHTTPConfig
 }
 
 // NewOpenAIProvider 创建 OpenAI 兼容 provider。
 // id 用于注册表键（如 "openai"、"deepseek"）；baseURL 如 "https://api.openai.com/v1"。
-func NewOpenAIProvider(id, baseURL string, models []Model) *OpenAIProvider {
+func NewOpenAIProvider(id, baseURL string, models []Model, options ...ProviderOption) *OpenAIProvider {
 	for i := range models {
 		models[i].Provider = id
 		models[i].BaseURL = baseURL
 	}
-	return &OpenAIProvider{id: id, baseURL: strings.TrimRight(baseURL, "/"), models: models, client: &http.Client{}}
+	return &OpenAIProvider{id: id, baseURL: strings.TrimRight(baseURL, "/"), models: models, http: newProviderHTTPConfig(options)}
 }
 
 func (p *OpenAIProvider) ID() string      { return p.id }
@@ -88,6 +88,9 @@ type oaiToolCall struct {
 }
 
 type oaiChunk struct {
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error"`
 	Choices []struct {
 		Delta struct {
 			Content          string        `json:"content"`
@@ -199,16 +202,11 @@ func (p *OpenAIProvider) stream(ctx context.Context, model Model, c Context, opt
 		req.Header.Set(k, v)
 	}
 
-	resp, err := p.client.Do(req)
+	resp, err := p.http.do(req, "openai")
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("openai: HTTP %d: %s", resp.StatusCode, string(b))
-	}
-
 	return consumeOAISSE(resp.Body, model, s)
 }
 
@@ -230,6 +228,7 @@ func consumeOAISSE(r io.Reader, model Model, s *EventStream) error {
 	var order []int
 	usage := Usage{}
 	finishReason := ""
+	done := false
 
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
@@ -240,11 +239,15 @@ func consumeOAISSE(r io.Reader, model Model, s *EventStream) error {
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
+			done = true
 			break
 		}
 		var chunk oaiChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue // 容忍注释/心跳行
+		}
+		if chunk.Error != nil {
+			return fmt.Errorf("openai: stream error: %s", chunk.Error.Message)
 		}
 		if chunk.Usage != nil {
 			usage.Input = chunk.Usage.PromptTokens
@@ -313,6 +316,10 @@ func consumeOAISSE(r io.Reader, model Model, s *EventStream) error {
 	}
 	if err := scanner.Err(); err != nil {
 		return err
+	}
+	// 兼容只发送 finish_reason 而不发送 [DONE] 的 OpenAI 网关。
+	if !done && finishReason == "" {
+		return fmt.Errorf("openai: stream ended before completion: %w", io.ErrUnexpectedEOF)
 	}
 
 	if thinkingOpen {

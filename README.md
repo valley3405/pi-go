@@ -149,6 +149,29 @@ h.Prompt(ctx, "修复 main.go 里的编译错误")
 a.WaitForIdle()
 ```
 
+## Provider 网络配置
+
+OpenAI 兼容和 Anthropic Provider 默认对成功响应头到达前的临时网络错误、429 和 5xx 最多重试 2 次，采用带抖动的指数退避（250ms 起步、4s 上限），等待可被 context 取消。支持 `Retry-After` 秒数和 HTTP 日期；服务端要求的等待超过上限时直接返回错误，不提前重试。收到成功响应头后，即使 SSE 中途断开或超时也不会重放请求，未完成的 EOF 会作为错误返回。
+
+```go
+transport := http.DefaultTransport.(*http.Transport).Clone()
+transport.ResponseHeaderTimeout = 30 * time.Second
+client := &http.Client{Transport: transport} // 保留默认的环境变量代理配置
+
+p := llm.NewOpenAIProvider("openai", baseURL, models,
+    llm.WithHTTPClient(client),
+    llm.WithRetryPolicy(llm.RetryPolicy{
+        MaxRetries: 2, InitialDelay: 250 * time.Millisecond, MaxDelay: 4 * time.Second,
+    }),
+)
+// NewAnthropicProvider(id, models, options...) 接收相同选项。
+// WithRetryPolicy(llm.RetryPolicy{MaxRetries: 0}) 可关闭重试。
+```
+
+`http.Client.Timeout` 会覆盖整个 SSE 读取过程；只限制建连或响应头等待时，应配置 Transport。默认 client 不设总超时，整体时限由调用 context 或 Agent 的 `MaxDuration` 控制。
+
+如需统一限制多个 Provider 或并发调用的请求速率，可向它们传入同一个 `WithRequestLimiter(limiter)`。限流器实现 `Wait(context.Context) error`，必须支持并发和取消；每次 HTTP 尝试（包括重试）都会先等待许可。默认不限制速率。
+
 ## 与 pi 的对应关系
 
 | pi | goagent |

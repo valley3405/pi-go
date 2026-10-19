@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"time"
 )
 
 // Role 是 LLM 认识的消息角色。LLM 只理解这三种角色。
@@ -196,6 +198,45 @@ type StreamOptions struct {
 	Temperature *float64
 	// Headers 允许注入额外请求头（对应 pi 的 before_provider_headers 场景）。
 	Headers map[string]string
+}
+
+// RetryPolicy 控制收到成功响应头之前的重试；SSE 消费期间绝不重放请求。
+// MaxRetries 不含首次请求，0 表示关闭重试；负数按 0 处理。
+// InitialDelay/MaxDelay <= 0 分别使用 250ms/4s。
+type RetryPolicy struct {
+	MaxRetries   int
+	InitialDelay time.Duration
+	MaxDelay     time.Duration
+}
+
+// RequestLimiter 可由多个 Provider 共享，每次 HTTP 尝试（包括重试）前调用。
+// 实现必须支持并发调用，并在 ctx 取消时停止等待。
+type RequestLimiter interface {
+	Wait(ctx context.Context) error
+}
+
+// ProviderOption 在构造时配置 Provider；运行期间不再修改配置。
+type ProviderOption func(*providerHTTPConfig)
+
+// WithHTTPClient 注入 HTTP client，用于代理、超时或自定义 Transport。
+// nil 保留默认 client；Provider 不会修改 client，调用方也不应在使用中修改它。
+// Client.Timeout 包含 SSE 读取时间；只限制建连/响应头时应配置 Transport。
+func WithHTTPClient(client *http.Client) ProviderOption {
+	return func(cfg *providerHTTPConfig) {
+		if client != nil {
+			cfg.client = client
+		}
+	}
+}
+
+// WithRetryPolicy 替换默认的重试策略（默认最多重试 2 次）。
+func WithRetryPolicy(policy RetryPolicy) ProviderOption {
+	return func(cfg *providerHTTPConfig) { cfg.retry = policy }
+}
+
+// WithRequestLimiter 注入可跨 Provider 共享的限流器；默认不限制速率。
+func WithRequestLimiter(limiter RequestLimiter) ProviderOption {
+	return func(cfg *providerHTTPConfig) { cfg.limiter = limiter }
 }
 
 // StreamFn 是 provider 无关的流式调用函数签名（对应 pi 的 StreamFn）。

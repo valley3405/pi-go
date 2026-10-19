@@ -99,17 +99,17 @@
 
 验收：内置工具与自定义工具经过同一输出上限；落盘文件内容完整；新增工具有临时目录集成测试，写操作仍受权限和调度约束。
 
-### 7. 提升 Provider 的网络健壮性
+### 7. 提升 Provider 的网络健壮性（已完成）
 
 位置：`pkg/llm/openai.go`、`pkg/llm/anthropic.go`、`pkg/llm/types.go`
 
 参考：Norma 的 [`Provider`](https://github.com/Autumn-27/Norma/blob/main/llm/provider.go)。
 
-- [ ] 对连接建立阶段的超时、连接重置、429 和 5xx 增加有界指数退避重试。
-- [ ] 不在 SSE 已开始后自动重放请求，避免重复产生副作用或重复内容。
-- [ ] 支持注入 `http.Client`，并验证代理、超时和自定义 Transport 场景。
-- [ ] 视实际需要增加共享速率限制，保证子 Agent 或并行调用也受同一限制。
-- [ ] 保持现有 Registry、动态 API Key、图片消息和缓存 usage 行为不变。
+- [x] 对收到成功响应头之前的超时、连接重置、429 和 5xx 增加有界指数退避重试；默认最多重试 2 次，250ms 起步、4s 上限并加入抖动，支持取消和 `Retry-After`。
+- [x] 收到成功响应头后不再自动重放请求；SSE 提前 EOF、读错误和流内 error 均报错，兼容仅提供 finish/stop reason 的正常结束。
+- [x] 通过构造选项注入 `http.Client`，测试覆盖代理、超时和自定义 Transport；现有构造调用保持兼容。
+- [x] 提供可跨 Provider 共享的 `RequestLimiter` 注入接口，每次 HTTP 尝试（包含重试）都经过限流；暂不内置固定厂商速率，默认不限流，并发共享与限流拒绝有测试覆盖。
+- [x] 保持现有 Registry、逐次调用的 API Key/Headers、图片消息和缓存 usage 行为不变。
 
 验收：使用 `httptest` 覆盖重试、退避、429/5xx、SSE 中途断开和不重放场景；现有 OpenAI/Anthropic 测试保持通过。
 

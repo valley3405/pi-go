@@ -17,16 +17,16 @@ type AnthropicProvider struct {
 	id      string
 	baseURL string
 	models  []Model
-	client  *http.Client
+	http    providerHTTPConfig
 }
 
 // NewAnthropicProvider 创建 Anthropic provider。
-func NewAnthropicProvider(id string, models []Model) *AnthropicProvider {
+func NewAnthropicProvider(id string, models []Model, options ...ProviderOption) *AnthropicProvider {
 	for i := range models {
 		models[i].Provider = id
 		models[i].BaseURL = "https://api.anthropic.com"
 	}
-	return &AnthropicProvider{id: id, baseURL: "https://api.anthropic.com", models: models, client: &http.Client{}}
+	return &AnthropicProvider{id: id, baseURL: "https://api.anthropic.com", models: models, http: newProviderHTTPConfig(options)}
 }
 
 func (p *AnthropicProvider) ID() string      { return p.id }
@@ -153,15 +153,11 @@ func (p *AnthropicProvider) stream(ctx context.Context, model Model, c Context, 
 		req.Header.Set(k, v)
 	}
 
-	resp, err := p.client.Do(req)
+	resp, err := p.http.do(req, "anthropic")
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("anthropic: HTTP %d: %s", resp.StatusCode, string(b))
-	}
 	return consumeAntSSE(resp.Body, s)
 }
 
@@ -175,6 +171,9 @@ type antUsage struct {
 }
 
 type antEvent struct {
+	Error struct {
+		Message string `json:"message"`
+	} `json:"error"`
 	Type    string `json:"type"`
 	Index   int    `json:"index"`
 	Message struct {
@@ -209,9 +208,11 @@ func consumeAntSSE(r io.Reader, s *EventStream) error {
 	blocks := map[int]*block{}
 	stopReason := ""
 	usage := Usage{}
+	done := false
 
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
+scan:
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -223,6 +224,11 @@ func consumeAntSSE(r io.Reader, s *EventStream) error {
 			continue
 		}
 		switch ev.Type {
+		case "error":
+			return fmt.Errorf("anthropic: stream error: %s", ev.Error.Message)
+		case "message_stop":
+			done = true
+			break scan
 		case "message_start":
 			eventUsage := ev.Message.Usage
 			if eventUsage == nil {
@@ -299,6 +305,9 @@ func consumeAntSSE(r io.Reader, s *EventStream) error {
 	}
 	if err := scanner.Err(); err != nil {
 		return err
+	}
+	if !done && stopReason == "" {
+		return fmt.Errorf("anthropic: stream ended before completion: %w", io.ErrUnexpectedEOF)
 	}
 
 	switch stopReason {

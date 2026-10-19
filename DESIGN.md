@@ -86,6 +86,9 @@ type Provider interface {
 - 内置 `OpenAIProvider`（兼容 OpenAI / DeepSeek / 各类网关，SSE 流式 + tool_calls 增量合并）与 `AnthropicProvider`（SSE，`content_block_*` 事件映射）。两者解析流式 usage；OpenAI 支持标准/DeepSeek 缓存字段，Anthropic 支持嵌套 message_start usage，并在完成时把 cacheRead/cacheWrite 合入 Input 以统一口径。
 - `FauxProvider`：脚本化响应队列，测试整个 agent 循环不需要真实 API key。
 - API key 通过 `opts.APIKey` / `GetAPIKey func(provider string) string` 注入（对应 pi 的 `getApiKey`，支持过期 token 每次调用前重新取）。
+- 两种 HTTP Provider 共用请求重试层：收到成功响应头之前，临时网络错误、429 和 5xx 默认最多重试 2 次，指数退避从 250ms 起步、上限 4s，并带半幅至全幅抖动；支持 context 取消和秒数/HTTP 日期形式的 `Retry-After`。服务端要求的等待超过退避上限时直接返回错误，不提前重试。每次尝试重建相同请求体和请求头。
+- 构造函数保留原参数，并支持可选的 `WithHTTPClient`、`WithRetryPolicy` 和 `WithRequestLimiter`。注入 client 不会被修改，支持代理和自定义 Transport；默认不设覆盖整条 SSE 的 Client.Timeout，由调用 context 或注入的 client 控制。限流器可跨 Provider/并发调用共享，每次尝试包含重试都调用 `Wait(ctx)`，默认不限流。
+- 成功响应返回后不再重试；SSE 读取错误、未完成的 EOF 和流内 error 返回错误，避免重放部分文本或工具调用。正常结束支持 OpenAI 的 `[DONE]`/finish_reason、Anthropic 的 message_stop/stop_reason，保留已有网关和缓存 usage 兼容性。
 
 ## 4. pkg/agent —— Agent 运行时（≈ pi-agent-core）
 
