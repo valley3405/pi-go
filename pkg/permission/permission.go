@@ -132,41 +132,75 @@ func (p *Policy) CurrentMode() Mode {
 	return mode
 }
 
-// Evaluate 按 deny 优先的顺序评估权限。工具规则支持 * 或精确工具名；
-// Bash 命令规则中 allow 为完整匹配，deny 为部分匹配。
-func (p *Policy) Evaluate(ctx context.Context, req Request) Decision {
-	p.mu.RLock()
-	mode := p.Mode
-	allowedTools := append([]string(nil), p.AllowedTools...)
-	disallowedTools := append([]string(nil), p.DisallowedTools...)
-	allowedCommands := append([]string(nil), p.AllowedCommands...)
-	deniedCommands := append([]string(nil), p.DeniedCommands...)
-	workingDir := p.WorkingDir
-	approver := p.Approver
-	p.mu.RUnlock()
+// policySnapshot 是 Evaluate 期间使用的配置快照：加锁拷贝后无锁评估。
+type policySnapshot struct {
+	mode            Mode
+	allowedTools    []string
+	disallowedTools []string
+	allowedCommands []string
+	deniedCommands  []string
+	workingDir      string
+	approver        Approver
+}
 
-	if matchRule(disallowedTools, req.ToolName) {
+func (p *Policy) snapshot() policySnapshot {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	mode := p.Mode
+	if mode == "" {
+		mode = ModeDefault
+	}
+	return policySnapshot{
+		mode:            mode,
+		allowedTools:    append([]string(nil), p.AllowedTools...),
+		disallowedTools: append([]string(nil), p.DisallowedTools...),
+		allowedCommands: append([]string(nil), p.AllowedCommands...),
+		deniedCommands:  append([]string(nil), p.DeniedCommands...),
+		workingDir:      p.WorkingDir,
+		approver:        p.Approver,
+	}
+}
+
+// evaluateBashRules 对 bash 工具应用命令规则：deny 为部分匹配，allow 为
+// 锚定全匹配（见 matchCommandRules）。early 为 true 时 deny 是最终决策。
+func evaluateBashRules(req Request, snap policySnapshot) (commandAllowed bool, deny Decision, early bool) {
+	command, isBash := bashCommand(req)
+	if !isBash {
+		return false, Decision{}, false
+	}
+	denied, allowed, err := matchCommandRules(command, snap.allowedCommands, snap.deniedCommands)
+	if err != nil {
+		return false, Denied(err.Error()), true
+	}
+	if denied {
+		return false, Denied(fmt.Sprintf("bash command is disallowed by policy: %q", command)), true
+	}
+	return allowed, Decision{}, false
+}
+
+// Evaluate 按 deny 优先的顺序评估权限，分五个阶段：
+// 1 硬拒绝（deny 压倒一切）→ 2 模式闸门 → 3 RequireApproval 强制审批线
+// （压过阶段 4 的全部自动放行）→ 4 放行通道（窄→宽）→ 5 auto 分类器/兜底审批。
+// 新增放行通道必须放在阶段 3 之后。
+func (p *Policy) Evaluate(ctx context.Context, req Request) Decision {
+	snap := p.snapshot()
+
+	// 阶段 1：硬拒绝区。
+	if matchRule(snap.disallowedTools, req.ToolName) {
 		return Denied(fmt.Sprintf("tool %q is disallowed by policy", req.ToolName))
 	}
-	commandAllowed := false
-	if command, isBash := bashCommand(req); isBash {
-		denied, allowed, err := matchCommandRules(command, allowedCommands, deniedCommands)
-		if err != nil {
-			return Denied(err.Error())
-		}
-		if denied {
-			return Denied(fmt.Sprintf("bash command is disallowed by policy: %q", command))
-		}
-		commandAllowed = allowed
+	commandAllowed, deny, early := evaluateBashRules(req, snap)
+	if early {
+		return deny
 	}
+	// 工具自检的 Deny 一票否决。
 	if req.ToolDecision.Behavior == Deny {
 		return Denied(req.ToolDecision.Reason)
 	}
 
-	if mode == "" {
-		mode = ModeDefault
-	}
-	switch mode {
+	// 阶段 2：模式闸门。bypass/plan 满足条件即放行，其余模式直通；
+	// 空 case 是未知模式的 fail-closed 兜底。
+	switch snap.mode {
 	case ModeBypass:
 		if !req.ToolDecision.RequireApproval {
 			return Allowed()
@@ -180,16 +214,19 @@ func (p *Policy) Evaluate(ctx context.Context, req Request) Decision {
 		}
 	case ModeDefault, ModeAcceptEdits, ModeAuto, ModeDontAsk:
 	default:
-		return Denied(fmt.Sprintf("unknown permission mode %q", mode))
-	}
-	if req.ToolDecision.RequireApproval {
-		return approve(ctx, req, mode, approver)
+		return Denied(fmt.Sprintf("unknown permission mode %q", snap.mode))
 	}
 
-	if matchRule(allowedTools, req.ToolName) {
+	// 阶段 3：强制审批线。RequireApproval 优先于下面的所有自动放行。
+	if req.ToolDecision.RequireApproval {
+		return approve(ctx, req, snap.mode, snap.approver)
+	}
+
+	// 阶段 4：放行通道，按授权宽度从窄到宽。
+	if matchRule(snap.allowedTools, req.ToolName) {
 		return Allowed()
 	}
-	if mode == ModeAcceptEdits && isEditTool(req.ToolName) {
+	if snap.mode == ModeAcceptEdits && isEditTool(req.ToolName) {
 		return Allowed()
 	}
 	if commandAllowed {
@@ -201,15 +238,23 @@ func (p *Policy) Evaluate(ctx context.Context, req Request) Decision {
 	if req.ToolDecision.Behavior == Allow {
 		return Allowed()
 	}
-	if mode == ModeAuto {
-		decision := autoDecision(req, workingDir)
+
+	// 阶段 5：兜底。auto 模式交给命令分类器（Ask 转审批）；其余一律审批。
+	if snap.mode == ModeAuto {
+		decision := autoDecision(req, snap.workingDir)
 		if decision.Behavior == Ask {
-			req.ToolDecision = decision
-			return approve(ctx, req, mode, approver)
+			return approve(ctx, withToolDecision(req, decision), snap.mode, snap.approver)
 		}
 		return decision
 	}
-	return approve(ctx, req, mode, approver)
+	return approve(ctx, req, snap.mode, snap.approver)
+}
+
+// withToolDecision 返回携带工具决策副本的请求，供审批器展示理由，
+// 替代对入参 req 的原地修改。
+func withToolDecision(req Request, td Decision) Request {
+	req.ToolDecision = td
+	return req
 }
 
 func approve(ctx context.Context, req Request, mode Mode, approver Approver) Decision {
