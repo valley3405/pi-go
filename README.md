@@ -151,7 +151,7 @@ go run ./cmd/goagent -tool-output-dir ""
 
 ## Skills
 
-在 `~/.goagent/skills/<name>/SKILL.md`（全局）或当前项目 `./agents/skills/<name>/SKILL.md`（项目级）放一个带 frontmatter 的文件即可注册技能：
+在 `~/.goagent/skills/<name>/SKILL.md`（全局）或当前项目 `./.agents/skills/<name>/SKILL.md`（项目级；`./agents/skills/` 作为兼容别名也会扫描）放一个带 frontmatter 的文件即可注册技能：
 
 ```markdown
 ---
@@ -164,7 +164,9 @@ description: Write good commit messages following conventional commits
 （技能正文：流程、规范、示例……）
 ```
 
-启动时自动发现（尊重 `.gitignore`/`.ignore`，同名时项目目录覆盖全局），清单注入系统提示词；模型按需用 `read` 工具加载 SKILL.md 全文。交互模式用 `/skills` 查看已加载技能。
+启动时自动发现（尊重 `.gitignore`/`.ignore`，同名时项目目录覆盖全局），清单注入系统提示词；模型按需用内置的只读 `skill` 工具按名加载 SKILL.md 全文——不经过文件读取权限，因此全局技能（位于工作区外）加载时不会触发审批。解析失败的技能会在启动时输出 warning，并可在 `/skills` 中查看；`/skills reload` 不重启即可重新扫描技能目录。上下文压缩时，最近一次加载的技能正文会按预算保留在压缩摘要中，不会因压缩丢失。
+
+注意：项目级技能随仓库分发，其内容会作为指令进入模型上下文。系统提示词已将项目技能标注为不可信内容，但评审陌生仓库的 `.agents/skills/` 仍是好习惯。
 
 ## 作为库嵌入
 

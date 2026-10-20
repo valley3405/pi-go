@@ -211,6 +211,13 @@ func (a *Agent) SetTools(tools []AgentTool) {
 	a.tools = append([]AgentTool{}, tools...)
 }
 
+// Tools 返回当前工具集副本。
+func (a *Agent) Tools() []AgentTool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]AgentTool{}, a.tools...)
+}
+
 // SetModel 切换模型。
 func (a *Agent) SetModel(m llm.Model) {
 	a.mu.Lock()

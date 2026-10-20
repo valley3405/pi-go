@@ -115,10 +115,19 @@ func main() {
 		h.AutoCompactWindow = *contextSize
 	}
 
-	// 加载技能（对应 pi 的 skills 资源）：全局 ~/.goagent/skills + 项目 ./.agents/skills
+	// 加载技能（对应 pi 的 skills 资源）：全局 ~/.goagent/skills + 项目
+	// ./.agents/skills（规范）与 ./agents/skills（兼容别名），后者同名覆盖前者。
+	// 注意此时工作目录已切到 workspace 根，项目技能锚定在 workspace 下。
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
-	h.ApplySkills(filepath.Join(home, ".goagent", "skills"), filepath.Join(cwd, ".agents", "skills"))
+	h.ApplySkills(
+		harness.SkillDir{Root: filepath.Join(home, ".goagent", "skills"), Source: "global"},
+		harness.SkillDir{Root: filepath.Join(cwd, "agents", "skills"), Source: "project"},
+		harness.SkillDir{Root: filepath.Join(cwd, ".agents", "skills"), Source: "project"},
+	)
+	for _, w := range h.SkillWarnings() {
+		fmt.Fprintln(os.Stderr, "skill warning:", w)
+	}
 
 	// Ctrl+C 中止当前 run（对应 pi 的 abort）
 	sigCh := make(chan os.Signal, 1)
@@ -286,6 +295,10 @@ func runInteractive(h *harness.Harness, reader *bufio.Reader) {
 			printTree(h)
 		case line == "/skills":
 			printSkills(h)
+		case line == "/skills reload":
+			h.ReloadSkills()
+			fmt.Printf("skills reloaded: %d loaded, %d warnings\n", len(h.SkillsList()), len(h.SkillWarnings()))
+			printSkills(h)
 		case line == "/compact":
 			fmt.Println("compacting...")
 			summary, err := h.Compact(context.Background())
@@ -335,12 +348,15 @@ func printTree(h *harness.Harness) {
 }
 
 func printSkills(h *harness.Harness) {
-	if len(h.Skills) == 0 {
+	skills := h.SkillsList()
+	if len(skills) == 0 {
 		fmt.Println("(no skills loaded)")
-		return
 	}
-	for _, s := range h.Skills {
+	for _, s := range skills {
 		fmt.Printf("%s [%s] %s\n  %s\n", s.Name, s.Source, s.Description, s.Dir)
+	}
+	for _, w := range h.SkillWarnings() {
+		fmt.Println("warning:", w)
 	}
 }
 

@@ -515,6 +515,15 @@ func (m Model) executeSlashCommand(text string) (tea.Model, tea.Cmd) {
 	case "/help":
 		m.appendSystem(helpText, false)
 	case "/skills":
+		if len(fields) == 2 && fields[1] == "reload" {
+			m.harness.ReloadSkills()
+			m.appendSystem(fmt.Sprintf("技能已重载：%d 个技能，%d 条警告\n%s", len(m.harness.SkillsList()), len(m.harness.SkillWarnings()), m.skillsText()), false)
+			break
+		}
+		if len(fields) != 1 {
+			m.appendSystem("用法：/skills [reload]", true)
+			break
+		}
 		m.appendSystem(m.skillsText(), false)
 	case "/tree":
 		m.appendSystem(m.treeText(), false)
@@ -606,15 +615,22 @@ func (m Model) executeUserBash(command string) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) skillsText() string {
-	if len(m.harness.Skills) == 0 {
-		return "未加载 skills"
-	}
+	skills := m.harness.SkillsList()
 	var b strings.Builder
-	for i, skill := range m.harness.Skills {
+	if len(skills) == 0 {
+		b.WriteString("未加载 skills")
+	}
+	for i, skill := range skills {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
 		fmt.Fprintf(&b, "%s [%s] %s\n  %s", skill.Name, skill.Source, skill.Description, skill.Dir)
+	}
+	for _, w := range m.harness.SkillWarnings() {
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString("警告：" + w)
 	}
 	return b.String()
 }
@@ -644,7 +660,7 @@ func (m Model) treeText() string {
 
 const helpText = `可用命令：
   /help             显示帮助
-  /skills           查看已加载 skills
+  /skills [reload]  查看已加载 skills；reload 重新扫描技能目录
   /tree             查看当前 session 分支
   /usage            查看最近及累计 token 用量
   /branch <id>      从历史 entry 创建分支

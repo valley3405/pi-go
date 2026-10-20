@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -74,12 +75,67 @@ func Compact(ctx context.Context, s *Session, streamFn llm.StreamFn, model llm.M
 		return "", fmt.Errorf("compaction produced empty summary")
 	}
 
+	// 技能正文随旧消息一起被摘要吞掉；把最近一次有效加载的技能正文
+	// 按预算原样重注入摘要（保留区已有技能结果时跳过，避免重复）。
+	kept := make([]agent.AgentMessage, 0, len(refs)-cut)
+	for i := cut; i < len(refs); i++ {
+		kept = append(kept, refs[i].message)
+	}
+	summary = reinjectSkillBody(summary, toSummarize, kept)
+
 	_, err = s.AppendCustom(EntryCompaction, CompactionPayload{
 		Summary:          summary,
 		FirstKeptEntryID: firstKeptEntryID,
 		TokensBefore:     estimateTokens(toSummarize),
 	})
 	return summary, err
+}
+
+// maxSkillReinjectRunes 是压缩时重注入技能正文的字符预算。
+const maxSkillReinjectRunes = 8000
+
+// reinjectSkillBody 在压缩摘要末尾附加上一次有效技能加载的完整正文。
+// compacted 是被摘要替代的消息，kept 是原样保留的消息。
+func reinjectSkillBody(summary string, compacted, kept []agent.AgentMessage) string {
+	for _, m := range kept {
+		if skillNameFromPayload(m.Payload) != "" {
+			return summary // 保留区已有技能结果，模型仍能看到正文
+		}
+	}
+	for i := len(compacted) - 1; i >= 0; i-- {
+		m := compacted[i]
+		if m.Role != llm.RoleToolResult || m.IsError || skillNameFromPayload(m.Payload) == "" {
+			continue
+		}
+		body := m.Text()
+		if body == "" {
+			return summary
+		}
+		var note string
+		if runes := []rune(body); len(runes) > maxSkillReinjectRunes {
+			body = string(runes[:maxSkillReinjectRunes])
+			note = fmt.Sprintf(" (truncated to %d chars)", maxSkillReinjectRunes)
+		}
+		return summary + "\n\n---\nThe most recently loaded skill content is preserved verbatim" + note + ":\n\n" + body
+	}
+	return summary
+}
+
+// skillNameFromPayload 从结果消息的 Payload 提取技能名；
+// 兼容内存中的 SkillResultDetails 和 session JSONL 解码出的 map。
+func skillNameFromPayload(payload any) string {
+	if payload == nil {
+		return ""
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	var details SkillResultDetails
+	if err := json.Unmarshal(data, &details); err != nil {
+		return ""
+	}
+	return details.SkillName
 }
 
 func estimateTokens(msgs []agent.AgentMessage) int {

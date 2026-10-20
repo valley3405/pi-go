@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"goagent/pkg/agent"
@@ -283,6 +284,127 @@ func TestBranchWithSummary(t *testing.T) {
 	}
 	if got := msgs[1].Text(); len(got) < 7 || got[:7] != "[Branch" {
 		t.Fatalf("branch summary missing: %q", got)
+	}
+}
+
+func skillResultMessage(callID, name, body string, isErr bool) agent.AgentMessage {
+	return agent.AgentMessage{
+		Message: llm.NewToolResultMessage(callID, "skill", []llm.Content{&llm.TextContent{Text: body}}, isErr),
+		Payload: harness.SkillResultDetails{SkillName: name, Dir: "/skills/" + name},
+	}
+}
+
+func TestCompactReinjectsLatestSkillBody(t *testing.T) {
+	faux := llm.NewFauxProvider("faux", []llm.Message{llm.FauxAssistant("summary")}, 16)
+	reg := llm.NewRegistry()
+	reg.SetProvider(faux)
+	model, _ := reg.GetModel("faux", "faux-1")
+
+	s, err := harness.CreateSession(t.TempDir(), "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	_, _ = s.AppendMessage(agent.NewUserMessage("task"))
+	_, _ = s.AppendMessage(skillResultMessage("c1", "commit", "# Skill: commit\n\nOLD skill body", false))
+	_, _ = s.AppendMessage(agent.NewUserMessage("more work"))
+	_, _ = s.AppendMessage(skillResultMessage("c2", "review", "# Skill: review\n\nLATEST skill body", false))
+	_, _ = s.AppendMessage(agent.NewUserMessage("latest"))
+
+	summary, err := harness.Compact(context.Background(), s, reg.StreamSimple, model, llm.StreamOptions{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 只重注入最近一次有效调用的正文
+	if !strings.Contains(summary, "LATEST skill body") {
+		t.Fatalf("latest skill body not reinjected:\n%s", summary)
+	}
+	if strings.Contains(summary, "OLD skill body") {
+		t.Fatalf("older skill body should not be reinjected:\n%s", summary)
+	}
+	// 重建后的上下文同样可见
+	msgs, err := s.Messages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(msgs[0].Text(), "LATEST skill body") {
+		t.Fatalf("rebuilt context lost skill body:\n%s", msgs[0].Text())
+	}
+}
+
+func TestCompactSkipsReinjectWhenSkillInKeptRegion(t *testing.T) {
+	faux := llm.NewFauxProvider("faux", []llm.Message{llm.FauxAssistant("summary")}, 16)
+	reg := llm.NewRegistry()
+	reg.SetProvider(faux)
+	model, _ := reg.GetModel("faux", "faux-1")
+
+	s, err := harness.CreateSession(t.TempDir(), "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	_, _ = s.AppendMessage(agent.NewUserMessage("task"))
+	_, _ = s.AppendMessage(agent.AgentMessage{Message: llm.Message{
+		Role: llm.RoleAssistant,
+		Content: []llm.Content{&llm.ToolCallContent{
+			ID: "c1", Name: "skill", Arguments: []byte(`{"name":"commit"}`),
+		}},
+	}})
+	_, _ = s.AppendMessage(skillResultMessage("c1", "commit", "# Skill: commit\n\nbody", false))
+	_, _ = s.AppendMessage(agent.NewUserMessage("latest"))
+
+	// 技能结果在保留区（assistant  toolcall 开头，结果不落在边界上）：摘要不应附带重注入段落
+	summary, err := harness.Compact(context.Background(), s, reg.StreamSimple, model, llm.StreamOptions{}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(summary, "preserved verbatim") {
+		t.Fatalf("skill already in kept region should not be reinjected:\n%s", summary)
+	}
+}
+
+func TestCompactSkipsFailedSkillResultAndTruncatesBudget(t *testing.T) {
+	faux := llm.NewFauxProvider("faux", []llm.Message{llm.FauxAssistant("summary"), llm.FauxAssistant("summary2")}, 16)
+	reg := llm.NewRegistry()
+	reg.SetProvider(faux)
+	model, _ := reg.GetModel("faux", "faux-1")
+
+	s, err := harness.CreateSession(t.TempDir(), "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// 错误结果不重注入
+	_, _ = s.AppendMessage(agent.NewUserMessage("task"))
+	_, _ = s.AppendMessage(skillResultMessage("c1", "commit", "unknown skill", true))
+	_, _ = s.AppendMessage(agent.NewUserMessage("latest"))
+	summary, err := harness.Compact(context.Background(), s, reg.StreamSimple, model, llm.StreamOptions{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(summary, "preserved verbatim") {
+		t.Fatalf("failed skill result should not be reinjected:\n%s", summary)
+	}
+
+	// 超长正文按预算截断
+	s2, err := harness.CreateSession(t.TempDir(), "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	longBody := "# Skill: big\n\n" + strings.Repeat("界", 9000)
+	_, _ = s2.AppendMessage(agent.NewUserMessage("task"))
+	_, _ = s2.AppendMessage(skillResultMessage("c2", "big", longBody, false))
+	_, _ = s2.AppendMessage(agent.NewUserMessage("latest"))
+	summary, err = harness.Compact(context.Background(), s2, reg.StreamSimple, model, llm.StreamOptions{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(summary, "truncated") || strings.Contains(summary, strings.Repeat("界", 9000)) {
+		t.Fatalf("long skill body should be truncated to budget:\n%.200s...", summary)
 	}
 }
 

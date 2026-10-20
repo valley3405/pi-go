@@ -3,10 +3,17 @@ package harness
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"goagent/pkg/agent"
 	"goagent/pkg/llm"
 )
+
+// SkillDir 是一个技能扫描根及其来源标注（如 "global"/"project"）。
+type SkillDir struct {
+	Root   string
+	Source string
+}
 
 // Harness 把 Agent 与树状 Session 组装在一起（对应 pi 的 AgentSession 的精简版）：
 // 订阅 agent 事件自动落盘，提供 Prompt/Branch/Resume/Compact。
@@ -16,11 +23,17 @@ type Harness struct {
 
 	streamFn   llm.StreamFn
 	streamOpts llm.StreamOptions
-	// Skills 是 ApplySkills 加载到的技能清单。
-	Skills []Skill
 	// AutoCompactWindow 大于 0 时，prompt 前按该窗口自动判断是否压缩。
 	AutoCompactWindow int
 	KeepRecent        int // compaction 时保留的最近消息数
+
+	skillsMu         sync.RWMutex
+	skills           []Skill
+	skillWarnings    []string
+	skillDirs        []SkillDir
+	systemPromptBase string
+	promptBaseSet    bool
+	skillToolAdded   bool
 }
 
 // New 创建 Harness。session 可为 nil（纯内存模式，不落盘）。
@@ -43,19 +56,72 @@ func New(a *agent.Agent, s *Session, streamFn llm.StreamFn, opts llm.StreamOptio
 	return h
 }
 
-// ApplySkills 把技能清单注入 agent 的系统提示词（对应 pi 的 skills 资源注入）。
-// 模型看到清单后，用 read 工具读取对应 SKILL.md 按需加载全文。
-// project 来源的技能覆盖 global 同名技能。
-func (h *Harness) ApplySkills(globalDir, projectDir string) {
-	global, _ := LoadSkills(globalDir, "global")
-	project, _ := LoadSkills(projectDir, "project")
-	skills := MergeSkills(global, project)
-	h.Skills = skills
-	if len(skills) == 0 {
-		return
+// ApplySkills 发现技能并注入 agent（对应 pi 的 skills 资源注入）：
+// 清单追加进系统提示词，同时注册只读的 skill 工具供模型按名加载全文。
+// 后传入的 SkillDir 覆盖先传入的同名技能。重复调用是幂等的
+// （系统提示词基于首次调用时的原文重建，不会重复追加）。
+func (h *Harness) ApplySkills(dirs ...SkillDir) {
+	h.skillsMu.Lock()
+	h.skillDirs = append([]SkillDir(nil), dirs...)
+	h.skillsMu.Unlock()
+	h.reloadSkills()
+}
+
+// ReloadSkills 按上次 ApplySkills 的目录重新扫描技能（热重载）。
+func (h *Harness) ReloadSkills() {
+	h.reloadSkills()
+}
+
+func (h *Harness) reloadSkills() {
+	h.skillsMu.RLock()
+	dirs := append([]SkillDir(nil), h.skillDirs...)
+	h.skillsMu.RUnlock()
+
+	var lists [][]Skill
+	var warnings []string
+	for _, d := range dirs {
+		skills, warns, _ := LoadSkills(d.Root, d.Source)
+		lists = append(lists, skills)
+		warnings = append(warnings, warns...)
 	}
+	merged := MergeSkills(lists...)
+
+	h.skillsMu.Lock()
+	h.skills = merged
+	h.skillWarnings = warnings
+	base := h.systemPromptBase
+	baseSet := h.promptBaseSet
+	toolAdded := h.skillToolAdded
+	h.skillsMu.Unlock()
+
 	snap := h.Agent.Snapshot()
-	h.Agent.SetSystemPrompt(snap.SystemPrompt + FormatForSystemPrompt(skills))
+	if !baseSet {
+		base = snap.SystemPrompt
+	}
+	h.Agent.SetSystemPrompt(base + FormatForSystemPrompt(merged))
+	if !toolAdded {
+		h.Agent.SetTools(append(h.Agent.Tools(), skillTool{h: h}))
+	}
+
+	h.skillsMu.Lock()
+	h.systemPromptBase = base
+	h.promptBaseSet = true
+	h.skillToolAdded = true
+	h.skillsMu.Unlock()
+}
+
+// SkillsList 返回当前技能清单副本。
+func (h *Harness) SkillsList() []Skill {
+	h.skillsMu.RLock()
+	defer h.skillsMu.RUnlock()
+	return append([]Skill(nil), h.skills...)
+}
+
+// SkillWarnings 返回最近一次扫描中解析失败的技能警告。
+func (h *Harness) SkillWarnings() []string {
+	h.skillsMu.RLock()
+	defer h.skillsMu.RUnlock()
+	return append([]string(nil), h.skillWarnings...)
 }
 
 // Prompt 提交新 prompt。开启 AutoCompactWindow 时先做自动压缩。

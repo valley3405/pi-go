@@ -197,7 +197,7 @@ type AgentTool interface {
 
 上下文接近窗口上限时，调 LLM 对旧消息生成摘要，append `CompactionEntry{summary, firstKeptEntryID, tokensBefore}`。对应 pi 的 `transformContext` + compaction entry 的组合。
 
-重建上下文时，`firstKeptEntryID` 定位未压缩尾部，最终序列为 `summary + kept messages`；原始 entry 仍全部保留在 JSONL 中。若保留边界落在 `toolResult` 前，则将该结果及其之前的调用一并压缩，避免恢复出孤立的工具结果。
+重建上下文时，`firstKeptEntryID` 定位未压缩尾部，最终序列为 `summary + kept messages`；原始 entry 仍全部保留在 JSONL 中。若保留边界落在 `toolResult` 前，则将该结果及其之前的调用一并压缩，避免恢复出孤立的工具结果。技能正文会随旧消息被摘要吞掉，因此 `skill` 工具结果在消息 `Payload` 中携带 `SkillResultDetails{skillName, dir}` 元数据；压缩时把被压缩区最近一次有效加载（非错误结果）的技能正文按字符预算（8000）原样重注入摘要末尾——保留区已有技能结果时跳过，避免重复。
 
 ### 5.3 Harness 组装
 
@@ -205,9 +205,9 @@ type AgentTool interface {
 
 ### 5.4 Skills（对应 pi 的 skills 资源）
 
-- **发现**：`LoadSkills(root, source)` 扫描 root 下含 `SKILL.md` 的目录（任意深度），解析 frontmatter（`name`/`description`，长度上限 64/1024，与 pi 一致）；尊重扫描根的 `.gitignore`/`.ignore`（简化语义：否定、目录限定、锚定、glob），点开头目录默认跳过；解析失败的技能静默跳过。
-- **合并**：`MergeSkills` 按来源合并，后者覆盖同名前者（project > global）。
-- **注入**：`Harness.ApplySkills(globalDir, projectDir)` 把技能清单渲染为系统提示词段落（`FormatForSystemPrompt`）；模型按需用 `read` 工具读 SKILL.md 全文——与 pi 的按需加载路径一致。
+- **发现**：`LoadSkills(root, source)` 扫描 root 下含 `SKILL.md` 的目录（任意深度），解析 frontmatter（`name`/`description`，长度上限 64/1024，与 pi 一致）；尊重扫描根的 `.gitignore`/`.ignore`（简化语义：否定、目录限定、锚定、glob），点开头目录默认跳过；解析失败的技能不中断扫描，作为 warning 返回并在 `/skills` 与启动 stderr 中可见。
+- **合并**：`MergeSkills` 按来源合并，后者覆盖同名前者（project > global）。CLI 扫描 `~/.goagent/skills`（global）与 workspace 下的 `.agents/skills`、`agents/skills`（project，后者为兼容别名）。
+- **注入**：`Harness.ApplySkills(dirs...)` 把技能清单渲染为系统提示词段落（`FormatForSystemPrompt`），项目技能单独分组并标注为不可信内容；同时注册内置只读 `skill` 工具——模型按名加载 SKILL.md 全文（去掉 frontmatter），只读标记使默认权限模式自动放行，工作区外的全局技能加载不再触发审批。`ApplySkills` 幂等（基于首次调用时的系统提示词原文重建），`ReloadSkills` 支持 `/skills reload` 热重载。技能状态由 RWMutex 保护，工具 goroutine 与 UI 可并发访问。
 
 ## 6. pkg/tools —— 内置编码工具
 
