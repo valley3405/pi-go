@@ -135,6 +135,9 @@ type Model struct {
 	approvalExpanded bool
 	approvalScroll   viewport.Model
 
+	sel        selection
+	plainLines []string
+
 	policy *permission.Policy
 }
 
@@ -290,9 +293,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
+		if handled, cmd := m.handleMouse(msg); handled {
+			return m, cmd
+		}
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
 		return m, cmd
+
+	case copiedMsg:
+		m.notice = fmt.Sprintf("已复制 %d 字符到剪贴板", msg.chars)
+		return m, nil
 
 	case tea.KeyMsg:
 		if len(m.approvals) > 0 {

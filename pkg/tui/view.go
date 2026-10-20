@@ -46,7 +46,7 @@ func (m Model) View() string {
 		parts = append(parts, m.headerView())
 	}
 	if m.viewport.Height > 0 {
-		parts = append(parts, m.viewport.View())
+		parts = append(parts, m.viewportView())
 	}
 	if len(m.approvals) > 0 {
 		parts = append(parts, m.approvalPanelView())
@@ -105,7 +105,7 @@ func (m Model) statusView() string {
 }
 
 func (m Model) helpView() string {
-	help := "Enter 发送 · Alt+Enter 换行 · Ctrl+O 轨迹 · PgUp/PgDn 滚动 · Esc/Ctrl+C 中止/退出"
+	help := "Enter 发送 · Alt+Enter 换行 · Ctrl+O 轨迹 · PgUp/PgDn 滚动 · 鼠标拖拽复制 · Esc/Ctrl+C 中止/退出"
 	if m.policy != nil {
 		help = "Shift+Tab 权限 · " + help
 	}
@@ -194,7 +194,9 @@ func (m *Model) resize(width, height int) {
 }
 
 func (m *Model) refreshTranscript(follow bool) {
-	m.viewport.SetContent(m.renderTranscript(m.viewport.Width))
+	content := m.renderTranscript(m.viewport.Width)
+	m.viewport.SetContent(content)
+	m.plainLines = strings.Split(stripANSI(content), "\n")
 	if follow {
 		m.viewport.GotoBottom()
 	}
