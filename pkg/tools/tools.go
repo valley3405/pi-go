@@ -59,12 +59,15 @@ func stringProp(desc string) map[string]any {
 func intProp(desc string) map[string]any {
 	return map[string]any{"type": "integer", "description": desc}
 }
+func boolProp(desc string) map[string]any {
+	return map[string]any{"type": "boolean", "description": desc}
+}
 
 func normalizeCRLF(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
 
 // CodingTools 返回未限制路径的底层工具集（兼容库嵌入）；默认 CLI 使用 Workspace.CodingTools。
 func CodingTools() []agent.AgentTool {
-	return []agent.AgentTool{Bash(), Read(), Write(), Edit(), MultiEdit(), LS(), Grep(), Glob()}
+	return []agent.AgentTool{Bash(), Read(), Write(), Edit(), MultiEdit(), LS(), Grep(), Glob(), WebSearch(), WebFetch()}
 }
 
 // ReadOnlyTools 返回未限制路径的底层只读工具集；受限版本见 Workspace.ReadOnlyTools。

@@ -42,10 +42,11 @@ func (w *Workspace) Root() string { return w.root }
 func (w *Workspace) Close() error { return w.dir.Close() }
 
 // CodingTools 返回受工作区约束的文件工具；bash 只固定工作目录，仍需宿主隔离。
+// web_search/web_fetch 不操作文件路径，不经工作区包装，但保留权限审批。
 func (w *Workspace) CodingTools() []agent.AgentTool {
 	bash := Bash().(*bashTool)
 	bash.dir = w.root
-	return append([]agent.AgentTool{bash}, w.fileTools(Read(), Write(), Edit(), MultiEdit(), LS(), Grep(), Glob())...)
+	return append([]agent.AgentTool{bash, WebSearch(), WebFetch()}, w.fileTools(Read(), Write(), Edit(), MultiEdit(), LS(), Grep(), Glob())...)
 }
 
 func (w *Workspace) ReadOnlyTools() []agent.AgentTool {

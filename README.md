@@ -14,7 +14,7 @@ pkg/agent     Agent 运行时：双层循环、steering/follow-up 双队列、
 pkg/permission 独立权限层：权限模式、工具/Bash 命令 allow/deny 规则、交互审批与 deny 优先
 pkg/harness   append-only JSONL 树状会话、分支、上下文压缩、
               skills 发现与注入（SKILL.md + frontmatter，gitignore 感知）
-pkg/tools     内置编码工具：bash / read / write / edit / multi_edit / ls / grep / glob
+pkg/tools     内置编码工具：bash / read / write / edit / multi_edit / ls / grep / glob / web_search / web_fetch
 pkg/tui       Bubble Tea 全屏客户端：流式对话、工具状态、多行输入、会话命令
 cmd/goagent   CLI：TUI（默认）、行式 REPL（-repl）与 print 模式
 examples/     无 API key 的端到端演示（FauxProvider）
@@ -59,7 +59,7 @@ go run ./cmd/goagent -repl
 
 ## Permissions
 
-默认 CLI 启用工作区约束和权限控制：工作区内 `read` / `ls` / `grep` / `glob` 自动允许，`write` / `edit` / `multi_edit` / `bash` 默认需要审批。工作区外读取必须单次审批，文件写入直接拒绝。审批面板始终展示完整参数（TUI 中可用 PgUp/PgDn 滚动、Ctrl+O 折叠/展开），不存在"仅展示前缀"的审批；选择需显式进行：TUI 中用 ↑/↓ 或 1/2 选择"允许/拒绝"后按 Enter 确认（默认选中"拒绝"），REPL 中输入 1 允许、2 拒绝。TUI 还可用 `Shift+Tab` 在 `default → acceptEdits → auto → plan` 间循环，状态栏以 `perm:<mode>` 显示当前模式；`bypass` 和 `dontAsk` 只能由启动参数设置，从这些模式按 `Shift+Tab` 会回到 `default`。可用模式：
+默认 CLI 启用工作区约束和权限控制：工作区内 `read` / `ls` / `grep` / `glob` 自动允许，`write` / `edit` / `multi_edit` / `bash` 默认需要审批。`web_search` / `web_fetch` 访问网络且按次计费，同样默认需要审批，可用 `-allow web_search` 等规则显式放权。工作区外读取必须单次审批，文件写入直接拒绝。审批面板始终展示完整参数（TUI 中可用 PgUp/PgDn 滚动、Ctrl+O 折叠/展开），不存在"仅展示前缀"的审批；选择需显式进行：TUI 中用 ↑/↓ 或 1/2 选择"允许/拒绝"后按 Enter 确认（默认选中"拒绝"），REPL 中输入 1 允许、2 拒绝。TUI 还可用 `Shift+Tab` 在 `default → acceptEdits → auto → plan` 间循环，状态栏以 `perm:<mode>` 显示当前模式；`bypass` 和 `dontAsk` 只能由启动参数设置，从这些模式按 `Shift+Tab` 会回到 `default`。可用模式：
 
 - `default`：只读工具自动允许，其他工具按规则或审批结果执行。
 - `acceptEdits`：额外自动允许 `write` / `edit` / `multi_edit`。

@@ -223,6 +223,8 @@ type AgentTool interface {
 | `ls` | 列目录 | `os.ReadDir` |
 | `grep` | 正则搜索文件内容 | `regexp` + `filepath.WalkDir` + .gitignore 简化支持 |
 | `glob` | 按 `*`、`?`、`**` 查找文件 | rune-safe 模式转 regexp + 排序 + max_results |
+| `web_search` | DeepSeek Search 接口搜索网页 | POST `/v1/tools/search`，408/429/5xx 重试；需审批（出网且按次计费） |
+| `web_fetch` | DeepSeek Fetch 接口抓取网页为 Markdown | POST `/v1/tools/fetch`；URL 限定 http/https 且不带凭证 |
 
 最终 ToolResult 在 `AfterToolCall` 后统一按字符数捕获：未配置 `ToolOutputDir` 时进行 rune-safe 头尾截断；配置后以 0600 临时文件保存完整文本，模型仅收到头部、省略说明和路径。`MaxToolOutputChars` 默认 30000，多个文本块合计计算，非文本块保留。
 
