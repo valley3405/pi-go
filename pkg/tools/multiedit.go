@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 // MultiEdit 在同一个文件中按顺序应用多组精确替换。

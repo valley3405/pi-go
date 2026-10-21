@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"goagent/pkg/llm"
-	"goagent/pkg/permission"
+	"github.com/valley3405/pi-go/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/permission"
 )
 
 // AgentMessage 比 llm.Message 宽：允许携带 LLM 不认识的自定义/UI 消息

@@ -1,4 +1,4 @@
-# goagent 架构设计
+# pi-go 架构设计
 
 参考 [pi](https://github.com/earendil-works/pi)（pi agent harness）的分层架构，用 Go 从零实现一个可扩展的 AI coding agent。本文档先做架构映射与设计决策，再给出开发计划。
 
@@ -6,14 +6,14 @@
 
 pi 的核心思想：**分层解耦 + 事件驱动 + 最小内核**。goagent 逐层对应：
 
-| pi (TypeScript) | goagent (Go) | 职责 |
+| pi (TypeScript) | pi-go (Go) | 职责 |
 |---|---|---|
 | `pi-ai` | `pkg/llm` | 统一多供应商 LLM API：消息模型、流式事件、工具调用、用量统计 |
 | `pi-agent-core` → `Agent` / `agent-loop` | `pkg/agent` | 有状态 agent：双层循环、steering/follow-up 双队列、生命周期事件、工具钩子 |
 | `agent/harness` + `session-manager` | `pkg/harness` | 会话持久化（append-only JSONL、树状分支）、上下文压缩（compaction） |
 | `coding-agent/core/tools` | `pkg/tools` | 内置工具：bash / read / write / edit / ls / grep |
 | 扩展系统（TS 模块） | 钩子接口 + 工具注册（Go interface） | Go 没有动态加载 TS 的能力，改用编译期接口注入 |
-| `pi-tui` | `pkg/tui` + `cmd/goagent` | Bubble Tea 全屏 TUI；保留 stdlib 行式 REPL 作为回退 |
+| `pi-tui` | `internal/tui` + `cmd/goagent` | Bubble Tea 全屏 TUI；保留 stdlib 行式 REPL 作为回退 |
 | RPC / server / client | 路线图 | 暂不进内核 |
 
 关键约束：核心 LLM、agent、harness 使用 Go 标准库（`net/http` + SSE 手工解析、`encoding/json`、`os/exec`）；工具层的安全目录访问复用已有 `golang.org/x/sys/unix`，以在 Go 1.23 上支持基于目录句柄的访问；TUI 使用 Bubble Tea/Bubbles/Lip Gloss，并固定兼容 Go 1.23 的 v1 版本。
@@ -24,7 +24,7 @@ pi 的核心思想：**分层解耦 + 事件驱动 + 最小内核**。goagent �
 ┌──────────────────────────────────────────────────┐
 │ cmd/goagent        CLI（TUI / REPL / print）        │
 ├──────────────────────────────────────────────────┤
-│ pkg/tui            Bubble Tea 模型、事件桥接与全屏布局 │
+│ internal/tui       Bubble Tea 模型、事件桥接与全屏布局 │
 ├──────────────────────────────────────────────────┤
 │ pkg/harness        会话树（JSONL）、分支、压缩、skills │
 ├──────────────────────────────────────────────────┤
@@ -228,7 +228,7 @@ type AgentTool interface {
 
 最终 ToolResult 在 `AfterToolCall` 后统一按字符数捕获：未配置 `ToolOutputDir` 时进行 rune-safe 头尾截断；配置后以 0600 临时文件保存完整文本，模型仅收到头部、省略说明和路径。`MaxToolOutputChars` 默认 30000，多个文本块合计计算，非文本块保留。
 
-## 7. pkg/tui + cmd/goagent —— 终端客户端
+## 7. internal/tui + cmd/goagent —— 终端客户端
 
 - **TUI 模式（默认）**：Bubble Tea 全屏应用，Bubbles viewport/textarea 分别负责历史滚动与多行输入，Lip Gloss 负责样式和自适应布局。`Agent.Subscribe` 的生命周期事件通过 `Program.Send` 转入 UI 更新循环，assistant 流式内容与并行工具状态按事件归并。
 - **权限审批**：TUI Approver 通过 `Program.Send` 提交请求并等待响应 channel，Model 排队处理并行工具审批。审批以独立面板呈现，始终展示完整（美化后）的参数：默认展开，可 Ctrl+O 折叠为带字符数的摘要行，展开时 PgUp/PgDn 在参数区内滚动；不存在"仅展示前缀"的审批语义。选择是显式两步操作：↑/↓/Tab 或 1/2 移动选中项（默认选中"拒绝"），Enter 确认，单键 `y`/`n` 不再生效；Esc/Ctrl+C 拒绝未决请求并中止 run。`Shift+Tab` 在 default / acceptEdits / auto / plan 间循环并更新状态栏，bypass/dontAsk 不进入快捷键循环。REPL 与普通输入共用同一个 `bufio.Reader`，打印完整参数后要求输入 `1`（允许）或 `2`（拒绝），其他输入重新询问；print 的 Approver 直接拒绝，不读取 stdin。

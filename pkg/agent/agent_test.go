@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
-	"goagent/pkg/permission"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/permission"
 )
 
 // echoTool 是一个测试工具：原样返回 args 里的 text。

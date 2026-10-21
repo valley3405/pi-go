@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 const compactionPrompt = `Summarize the conversation so far for an AI coding agent that will continue working. Preserve:

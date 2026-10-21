@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"goagent/pkg/permission"
+	"github.com/valley3405/pi-go/pkg/permission"
 )
 
 func TestWorkspaceAutoMode(t *testing.T) {

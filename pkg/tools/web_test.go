@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"goagent/pkg/llm"
-	"goagent/pkg/tools"
+	"github.com/valley3405/pi-go/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/tools"
 )
 
 func setupWebEnv(t *testing.T, baseURL string) {

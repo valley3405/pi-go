@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"goagent/pkg/llm"
-	"goagent/pkg/tools"
+	"github.com/valley3405/pi-go/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/tools"
 )
 
 func TestGlobRecursiveAndRootPatterns(t *testing.T) {

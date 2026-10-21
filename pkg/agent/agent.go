@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"goagent/pkg/llm"
-	"goagent/pkg/permission"
+	"github.com/valley3405/pi-go/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/permission"
 )
 
 // pendingMessageQueue 对应 pi 的 PendingMessageQueue。

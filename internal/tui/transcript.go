@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 type entryKind uint8

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"goagent/pkg/permission"
+	"github.com/valley3405/pi-go/pkg/permission"
 )
 
 func TestAutoModeTools(t *testing.T) {

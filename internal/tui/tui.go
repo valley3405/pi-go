@@ -1,4 +1,5 @@
-// Package tui provides the interactive Bubble Tea client for goagent.
+// Package tui provides the interactive Bubble Tea client for the goagent CLI.
+// It is internal: the public library surface lives under pkg/.
 package tui
 
 import (
@@ -15,10 +16,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/harness"
-	"goagent/pkg/permission"
-	"goagent/pkg/tools"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/harness"
+	"github.com/valley3405/pi-go/pkg/permission"
+	"github.com/valley3405/pi-go/pkg/tools"
 )
 
 const (

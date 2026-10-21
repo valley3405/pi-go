@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"goagent/pkg/permission"
+	"github.com/valley3405/pi-go/pkg/permission"
 )
 
 type ruleList []string

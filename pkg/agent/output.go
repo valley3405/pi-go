@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 const DefaultMaxToolOutputChars = 30000

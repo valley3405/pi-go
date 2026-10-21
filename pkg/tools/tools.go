@@ -9,9 +9,9 @@ import (
 	"strings"
 	"sync"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
-	"goagent/pkg/permission"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/permission"
 )
 
 // FileMutationQueue 串行化文件写操作（对应 pi 的 file-mutation-queue）。

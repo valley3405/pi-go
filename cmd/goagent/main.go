@@ -13,11 +13,11 @@ import (
 	"strings"
 	"syscall"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/harness"
-	"goagent/pkg/llm"
-	"goagent/pkg/tools"
-	"goagent/pkg/tui"
+	"github.com/valley3405/pi-go/internal/tui"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/harness"
+	"github.com/valley3405/pi-go/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/tools"
 )
 
 // version 由 Makefile 的 -ldflags "-X main.version=..." 注入。

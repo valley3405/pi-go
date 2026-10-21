@@ -3,9 +3,9 @@
 
 GO         ?= go
 BINARY     := goagent
-PKG        := goagent/cmd/goagent
+PKG        := github.com/valley3405/pi-go/cmd/goagent
 BIN_DIR    := bin
-DEMO       := goagent/examples/fauxdemo
+DEMO       := github.com/valley3405/pi-go/examples/fauxdemo
 GOFLAGS    := -trimpath
 LDFLAGS    := -s -w
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)

@@ -28,7 +28,7 @@
 
 ### 2. 增加独立权限层，并接入默认 CLI（已完成）
 
-位置：`pkg/permission`、`pkg/agent/loop.go`、`pkg/tools`、`cmd/goagent`、`pkg/tui`
+位置：`pkg/permission`、`pkg/agent/loop.go`、`pkg/tools`、`cmd/goagent`、`internal/tui`
 
 参考：Norma 的 [`permission`](https://github.com/Autumn-27/Norma/blob/main/permission/permission.go) 和 fail-closed 工具默认值。
 
@@ -56,7 +56,7 @@
 
 ### 2.2 增加必要时询问的 auto 权限模式（已完成）
 
-位置：`pkg/permission`、`pkg/tools/workspace_test.go`、`pkg/tui`、`cmd/goagent`
+位置：`pkg/permission`、`pkg/tools/workspace_test.go`、`internal/tui`、`cmd/goagent`
 
 - [x] 新增 `-permission auto` 和 `Policy.WorkingDir`。
 - [x] 只读工具、工作区内写工具和常规开发命令自动执行。
@@ -161,7 +161,7 @@
 
 ### 10. 增加后台任务生命周期管理
 
-位置：可新增 `pkg/tasks`；接入 `pkg/tools/bash.go`、`pkg/agent`、`pkg/tui`
+位置：可新增 `pkg/tasks`；接入 `pkg/tools/bash.go`、`pkg/agent`、`internal/tui`
 
 - [ ] 按会话管理后台任务，提供 TaskList、TaskOutput、TaskStop。
 - [ ] 在回合边界把任务完成通知注入上下文，避免忙等。
@@ -189,7 +189,7 @@
 - [ ] **长期 Memory**：与树状会话分离，明确写入、召回、过期和用户删除策略，避免把会话历史直接当作长期记忆。
 - [ ] **Deferred Tools**：在 MCP 或大量自定义工具出现后再做，按需提供 Schema 并控制可调用集合。
 - [ ] **OpenAI Responses API / 非流式 Provider**：根据实际模型需求增加，复用统一消息和事件模型，不复制 Agent loop。
-- [ ] **SDK 发布整理**：若对外作为库发布，将 `module goagent` 调整为真实仓库路径，稳定公开 API，并同步 README、DESIGN 和示例。
+- [x] **SDK 发布整理**：若对外作为库发布，将 `module goagent` 调整为真实仓库路径，稳定公开 API，并同步 README、DESIGN 和示例。（已完成：模块路径 `github.com/valley3405/pi-go`，`pkg/tui` 收进 `internal/tui`，公开库面为 `pkg/llm`、`pkg/agent`、`pkg/permission`、`pkg/tools`、`pkg/harness`）
 
 ## 不建议直接照搬的部分
 

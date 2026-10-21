@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 func TestFauxStreamEvents(t *testing.T) {

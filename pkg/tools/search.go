@@ -10,8 +10,8 @@ import (
 	"regexp"
 	"strings"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 // LS 列目录（对应 pi 的 ls 工具）。

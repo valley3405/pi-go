@@ -1,6 +1,6 @@
-# goagent
+# pi-go
 
-参考 [pi](https://github.com/earendil-works/pi)（pi agent harness）架构，用 Go 实现的 AI coding agent。核心运行时仅使用标准库，终端 UI 基于 [Bubble Tea](https://github.com/charmbracelet/bubbletea)。
+参考 [pi](https://github.com/earendil-works/pi)（pi agent harness）架构，用 Go 实现的 AI coding agent，CLI 二进制名为 `goagent`。核心运行时仅使用标准库，终端 UI 基于 [Bubble Tea](https://github.com/charmbracelet/bubbletea)。
 
 架构设计与 pi 的逐层映射见 [DESIGN.md](DESIGN.md)。
 
@@ -15,7 +15,7 @@ pkg/permission 独立权限层：权限模式、工具/Bash 命令 allow/deny �
 pkg/harness   append-only JSONL 树状会话、分支、上下文压缩、
               skills 发现与注入（SKILL.md + frontmatter，gitignore 感知）
 pkg/tools     内置编码工具：bash / read / write / edit / multi_edit / ls / grep / glob / web_search / web_fetch
-pkg/tui       Bubble Tea 全屏客户端：流式对话、工具状态、多行输入、会话命令
+internal/tui  Bubble Tea 全屏客户端：流式对话、工具状态、多行输入、会话命令（不对外）
 cmd/goagent   CLI：TUI（默认）、行式 REPL（-repl）与 print 模式
 examples/     无 API key 的端到端演示（FauxProvider）
 ```
@@ -26,6 +26,12 @@ examples/     无 API key 的端到端演示（FauxProvider）
 go build ./...
 go test ./...
 go run ./examples/fauxdemo   # 无需 API key 的演示
+```
+
+安装 CLI（二进制名为 `goagent`）：
+
+```bash
+go install github.com/valley3405/pi-go/cmd/goagent@latest
 ```
 
 ## 使用
@@ -170,7 +176,16 @@ description: Write good commit messages following conventional commits
 
 ## 作为库嵌入
 
+公开库面为 `pkg/` 下的五个包：`llm`、`agent`、`permission`、`tools`、`harness`（`internal/` 与 `cmd/` 不对外）。按语义化版本打 tag 发布；v0.x 阶段 minor 版本可能包含破坏性变更，升级前请阅读 release notes。
+
 ```go
+import (
+    "github.com/valley3405/pi-go/pkg/agent"
+    "github.com/valley3405/pi-go/pkg/harness"
+    "github.com/valley3405/pi-go/pkg/llm"
+    "github.com/valley3405/pi-go/pkg/tools"
+)
+
 faux := llm.NewFauxProvider("faux", script, 16)        // 或 NewOpenAIProvider / NewAnthropicProvider
 reg := llm.NewRegistry()
 reg.SetProvider(faux)
@@ -220,7 +235,7 @@ p := llm.NewOpenAIProvider("openai", baseURL, models,
 
 ## 与 pi 的对应关系
 
-| pi | goagent |
+| pi | pi-go |
 |---|---|
 | `Agent` / `agent-loop` | `agent.Agent` / `runLoop` |
 | steering / follow-up 队列 | `Agent.Steer()` / `Agent.FollowUp()` |

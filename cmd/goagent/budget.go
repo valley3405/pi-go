@@ -1,6 +1,6 @@
 package main
 
-import "goagent/pkg/agent"
+import "github.com/valley3405/pi-go/pkg/agent"
 
 func terminationExitCode(reason agent.TerminationReason) int {
 	switch reason {

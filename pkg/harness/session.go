@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 // EntryType 是会话 entry 类型。

@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
-	"goagent/pkg/permission"
-	"goagent/pkg/tools"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/permission"
+	"github.com/valley3405/pi-go/pkg/tools"
 )
 
 func runBashWithPolicy(t *testing.T, command string, policy *permission.Policy) []agent.AgentMessage {

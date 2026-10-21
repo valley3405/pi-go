@@ -3,7 +3,7 @@ package agent
 import (
 	"encoding/json"
 
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 // AgentMessage 的 JSON 编解码。llm.Message 已带自定义编解码（内容块类型标签），

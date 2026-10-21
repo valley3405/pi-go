@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 func TestCaptureToolResultLeavesSmallOutput(t *testing.T) {

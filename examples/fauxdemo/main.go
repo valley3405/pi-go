@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"os"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/harness"
-	"goagent/pkg/llm"
-	"goagent/pkg/tools"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/harness"
+	"github.com/valley3405/pi-go/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/tools"
 )
 
 func toolCall(id, name string, args any) *llm.ToolCallContent {

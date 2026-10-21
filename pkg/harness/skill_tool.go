@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 // SkillResultDetails 是 skill 工具成功加载时附加到结果消息 Payload 的

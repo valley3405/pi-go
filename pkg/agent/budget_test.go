@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 func newBudgetAgent(script []llm.Message, maxTurns int, maxDuration time.Duration, toolList ...agent.AgentTool) (*agent.Agent, *llm.FauxProvider) {

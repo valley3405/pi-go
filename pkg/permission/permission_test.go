@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"goagent/pkg/permission"
+	"github.com/valley3405/pi-go/pkg/permission"
 )
 
 func TestPolicyEvaluate(t *testing.T) {

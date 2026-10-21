@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 // DeepSeek Search/Fetch API（https://api-docs.deepseek.com/zh-cn/guides/search）。

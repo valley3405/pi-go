@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 type usageStats struct {

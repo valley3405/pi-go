@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"goagent/pkg/llm"
-	"goagent/pkg/permission"
+	"github.com/valley3405/pi-go/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/permission"
 )
 
 // eventSink 是循环内部的事件出口。

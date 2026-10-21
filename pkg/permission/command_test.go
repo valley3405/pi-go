@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"goagent/pkg/permission"
+	"github.com/valley3405/pi-go/pkg/permission"
 )
 
 func bashRequest(t *testing.T, command string) permission.Request {

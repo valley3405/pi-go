@@ -1,4 +1,4 @@
-module goagent
+module github.com/valley3405/pi-go
 
 go 1.23.0
 

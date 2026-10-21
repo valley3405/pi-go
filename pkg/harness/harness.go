@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 // SkillDir 是一个技能扫描根及其来源标注（如 "global"/"project"）。

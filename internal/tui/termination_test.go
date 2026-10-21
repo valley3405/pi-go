@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"goagent/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/agent"
 )
 
 func TestTerminationReasonIsVisible(t *testing.T) {

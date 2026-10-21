@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/permission"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/permission"
 )
 
 // Workspace 固定文件工具的根目录。Close 应在所有工具调用结束后执行。

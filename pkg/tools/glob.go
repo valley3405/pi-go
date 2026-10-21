@@ -11,8 +11,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 // Glob 按 glob 模式查找文件，支持 *、? 和 **。

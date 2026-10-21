@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
-	"goagent/pkg/tools"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/tools"
 )
 
 type longOutputTool struct{ text string }

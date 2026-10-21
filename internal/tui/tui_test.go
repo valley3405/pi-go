@@ -11,11 +11,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/harness"
-	"goagent/pkg/llm"
-	"goagent/pkg/permission"
-	"goagent/pkg/tools"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/harness"
+	"github.com/valley3405/pi-go/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/permission"
+	"github.com/valley3405/pi-go/pkg/tools"
 )
 
 func newTestHarness(t *testing.T, script []llm.Message, withSession bool, toolList ...agent.AgentTool) *harness.Harness {

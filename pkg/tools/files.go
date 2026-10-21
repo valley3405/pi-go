@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 // Read 读取文件内容（offset/limit + 行号前缀，对应 pi 的 read 工具）。

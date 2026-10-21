@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"goagent/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/agent"
 )
 
 func TestTerminationExitCode(t *testing.T) {

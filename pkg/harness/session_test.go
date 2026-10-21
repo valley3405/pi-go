@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/harness"
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/harness"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 func TestSessionTreeAndBranch(t *testing.T) {

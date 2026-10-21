@@ -9,8 +9,8 @@ import (
 	"os/exec"
 	"time"
 
-	"goagent/pkg/agent"
-	"goagent/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/agent"
+	"github.com/valley3405/pi-go/pkg/llm"
 )
 
 // BashResultDetails 描述进程退出状态，不改变返回给模型的文本内容。

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"goagent/pkg/llm"
-	"goagent/pkg/tools"
+	"github.com/valley3405/pi-go/pkg/llm"
+	"github.com/valley3405/pi-go/pkg/tools"
 )
 
 // 回归：后台进程继承 stdout 管道时，Wait 不得卡住。
