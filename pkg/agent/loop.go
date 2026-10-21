@@ -50,6 +50,7 @@ func runAgentLoop(ctx context.Context, prompts []AgentMessage, agentCtx Context,
 func runLoop(ctx context.Context, curCtx *Context, newMessages *[]AgentMessage, cfg loopConfig, streamFn llm.StreamFn, emit eventSink) (TerminationReason, error) {
 	firstTurn := true
 	turnCount := 0
+	settling := false
 	outputRecoveryCount := 0
 	var pending []AgentMessage
 	if cfg.getSteering != nil {
@@ -62,7 +63,15 @@ func runLoop(ctx context.Context, curCtx *Context, newMessages *[]AgentMessage, 
 		for hasMoreToolCalls || len(pending) > 0 {
 			turnCount++
 			if cfg.maxTurns > 0 && turnCount > cfg.maxTurns {
-				return endAgent(TerminationMaxTurns, *newMessages, emit)
+				if cfg.settlement != nil && !settling {
+					// 预算收尾：注入收尾提示、摘除指定工具、追加回合；同回合生效
+					settling = true
+					pending = append(pending, NewUserMessage(cfg.settlement.Prompt))
+					curCtx.Tools = filterTools(curCtx.Tools, cfg.settlement.DisabledTools)
+					cfg.maxTurns += cfg.settlement.MaxTurns
+				} else {
+					return endAgent(TerminationMaxTurns, *newMessages, emit)
+				}
 			}
 			if !firstTurn {
 				if err := emit(Event{Type: EventTurnStart}); err != nil {
@@ -583,6 +592,25 @@ func findTool(tools []AgentTool, name string) AgentTool {
 		}
 	}
 	return nil
+}
+
+// filterTools 按名字摘除工具；被摘除的工具只是不再发给模型，
+// 历史消息中的 tool_use/tool_result 配对不受影响。
+func filterTools(tools []AgentTool, disabled []string) []AgentTool {
+	if len(disabled) == 0 {
+		return tools
+	}
+	blocked := make(map[string]bool, len(disabled))
+	for _, name := range disabled {
+		blocked[name] = true
+	}
+	kept := make([]AgentTool, 0, len(tools))
+	for _, t := range tools {
+		if !blocked[t.Name()] {
+			kept = append(kept, t)
+		}
+	}
+	return kept
 }
 
 func toolResultMessage(tc *llm.ToolCallContent, result ToolResult, isErr bool) AgentMessage {

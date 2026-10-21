@@ -138,7 +138,7 @@ const (
     7. 排空 steeringQueue 作为 pendingMessages
 ```
 
-每次 assistant 响应计一个 turn，恢复请求也计入 MaxTurns。MaxDuration 通过 runCtx 同时约束 Provider 流和工具执行；ctx 取消时不等待 `stream.Result()`，而是用当前 partial 补齐 aborted 终态。Provider 的 413/context-length 类错误归为 prompt_too_long，其他 hook/转换错误归为 error。
+每次 assistant 响应计一个 turn，恢复请求也计入 MaxTurns。配置 `Settlement` 时命中 MaxTurns 不立即终止：注入收尾提示、按名摘除工具（仅不再发给模型，历史 tool_use/tool_result 配对不受影响）并追加 `Settlement.MaxTurns` 回合；收尾阶段模型自然停止按 completed 结束，收尾预算再耗尽仍以 max_turns 终止。MaxDuration 通过 runCtx 同时约束 Provider 流和工具执行；ctx 取消时不等待 `stream.Result()`，而是用当前 partial 补齐 aborted 终态。Provider 的 413/context-length 类错误归为 prompt_too_long，其他 hook/转换错误归为 error。
 
 ### 4.4 工具执行三段管线
 

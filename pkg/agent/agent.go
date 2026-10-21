@@ -75,6 +75,7 @@ type Agent struct {
 	streamOpts         llm.StreamOptions
 	permission         permission.Evaluator
 	maxTurns           int
+	settlement         *SettlementConfig
 	maxDuration        time.Duration
 	toolOutputDir      string
 	maxToolOutputChars int
@@ -115,6 +116,9 @@ type Options struct {
 	Permission permission.Evaluator
 	// MaxTurns 限制每次 Prompt 的 LLM 响应次数；<=0 表示不限制。
 	MaxTurns int
+	// Settlement 非 nil 时，命中 MaxTurns 不立即终止：注入收尾提示、
+	// 摘除指定工具并追加 Settlement.MaxTurns 回合；收尾预算再耗尽仍以 max_turns 结束。
+	Settlement *SettlementConfig
 	// MaxDuration 限制一次 Prompt 的总时长；<=0 表示不限制。
 	MaxDuration time.Duration
 	// ToolOutputDir 非空时，超限工具输出的完整文本保存到该目录。
@@ -138,6 +142,7 @@ func New(opts Options) *Agent {
 		streamOpts:         opts.StreamOptions,
 		permission:         opts.Permission,
 		maxTurns:           opts.MaxTurns,
+		settlement:         opts.Settlement,
 		maxDuration:        opts.MaxDuration,
 		toolOutputDir:      opts.ToolOutputDir,
 		maxToolOutputChars: opts.MaxToolOutputChars,
@@ -389,6 +394,7 @@ func (a *Agent) buildLoopConfig() loopConfig {
 		model:          a.state.Model,
 		toolExecution:  a.ToolExecution,
 		maxTurns:       a.maxTurns,
+		settlement:     a.settlement,
 		output:         outputConfig{dir: a.toolOutputDir, maxChars: a.maxToolOutputChars},
 		permission:     a.permission,
 		convertToLLM:   a.ConvertToLLM,

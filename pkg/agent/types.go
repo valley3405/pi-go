@@ -191,11 +191,20 @@ type Context struct {
 	Tools        []AgentTool
 }
 
+// SettlementConfig 是命中 MaxTurns 时的预算收尾配置：注入收尾提示、
+// 摘除指定工具并追加若干回合；收尾预算再耗尽时终止原因仍为 max_turns。
+type SettlementConfig struct {
+	Prompt        string   // 命中预算时注入的收尾提示
+	DisabledTools []string // 收尾阶段摘除的工具名
+	MaxTurns      int      // 收尾阶段追加的回合数
+}
+
 // loopConfig 是传给循环的配置（对应 pi 的 AgentLoopConfig）。
 type loopConfig struct {
 	model          llm.Model
 	toolExecution  ExecutionMode
 	maxTurns       int
+	settlement     *SettlementConfig
 	output         outputConfig
 	permission     permission.Evaluator
 	convertToLLM   func([]AgentMessage) ([]llm.Message, error)

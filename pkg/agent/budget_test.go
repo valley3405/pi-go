@@ -135,6 +135,107 @@ func TestMaxDurationDuringTool(t *testing.T) {
 	}
 }
 
+func TestSettlementCompletesNaturally(t *testing.T) {
+	toolCall := func(id string) llm.Message {
+		return llm.FauxToolCall("", &llm.ToolCallContent{ID: id, Name: "echo", Arguments: json.RawMessage(`{"text":"x"}`)})
+	}
+	var calls int32
+	faux := llm.NewFauxProvider("faux", []llm.Message{
+		toolCall("c1"), toolCall("c2"), llm.FauxAssistant("wrap up done"),
+	}, 4)
+	reg := llm.NewRegistry()
+	reg.SetProvider(faux)
+	model, _ := reg.GetModel("faux", "faux-1")
+	a := agent.New(agent.Options{
+		SystemPrompt: "test",
+		Model:        model,
+		Tools:        []agent.AgentTool{&echoTool{calls: &calls}},
+		StreamFn:     reg.StreamSimple,
+		MaxTurns:     2,
+		Settlement:   &agent.SettlementConfig{Prompt: "预算耗尽，请收尾", DisabledTools: []string{"echo"}, MaxTurns: 2},
+	})
+	if err := a.Prompt(context.Background(), "keep going"); err != nil {
+		t.Fatal(err)
+	}
+	waitForIdle(t, a)
+	if reason := a.Snapshot().TerminationReason; reason != agent.TerminationCompleted {
+		t.Fatalf("reason=%q, want completed", reason)
+	}
+	if len(faux.Requests) != 3 || calls != 2 {
+		t.Fatalf("requests=%d tool calls=%d, want 3 and 2", len(faux.Requests), calls)
+	}
+	// 收尾提示注入历史；前两个请求带 echo，收尾请求已摘除 echo
+	var settlement int
+	for _, msg := range a.Messages() {
+		if msg.Role == llm.RoleUser && strings.Contains(msg.Text(), "预算耗尽") {
+			settlement++
+		}
+	}
+	if settlement != 1 {
+		t.Fatalf("settlement prompts=%d, want 1", settlement)
+	}
+	for i, req := range faux.Requests {
+		hasEcho := false
+		for _, tool := range req.Tools {
+			if tool.Name == "echo" {
+				hasEcho = true
+			}
+		}
+		if i < 2 && !hasEcho {
+			t.Errorf("request %d should include echo", i)
+		}
+		if i == 2 && hasEcho {
+			t.Errorf("settlement request should drop echo")
+		}
+	}
+}
+
+func TestSettlementBudgetExhausted(t *testing.T) {
+	toolCall := func(id string) llm.Message {
+		return llm.FauxToolCall("", &llm.ToolCallContent{ID: id, Name: "echo", Arguments: json.RawMessage(`{"text":"x"}`)})
+	}
+	var calls int32
+	faux := llm.NewFauxProvider("faux", []llm.Message{toolCall("c1"), toolCall("c2"), toolCall("c3")}, 4)
+	reg := llm.NewRegistry()
+	reg.SetProvider(faux)
+	model, _ := reg.GetModel("faux", "faux-1")
+	a := agent.New(agent.Options{
+		SystemPrompt: "test",
+		Model:        model,
+		Tools:        []agent.AgentTool{&echoTool{calls: &calls}},
+		StreamFn:     reg.StreamSimple,
+		MaxTurns:     1,
+		Settlement:   &agent.SettlementConfig{Prompt: "预算耗尽，请收尾", DisabledTools: []string{"echo"}, MaxTurns: 1},
+	})
+	if err := a.Prompt(context.Background(), "keep going"); err != nil {
+		t.Fatal(err)
+	}
+	waitForIdle(t, a)
+	if reason := a.Snapshot().TerminationReason; reason != agent.TerminationMaxTurns {
+		t.Fatalf("reason=%q, want max_turns", reason)
+	}
+	// 收尾阶段 echo 已摘除：不再执行，但 tool_use/tool_result 配对完整
+	if calls != 1 {
+		t.Fatalf("echo executions=%d, want 1 (disabled after settlement)", calls)
+	}
+	var toolUses, toolResults, notFound int
+	for _, msg := range a.Messages() {
+		toolUses += len(msg.ToolCalls())
+		if msg.Role == llm.RoleToolResult {
+			toolResults++
+			if strings.Contains(msg.Text(), "not found") {
+				notFound++
+			}
+		}
+	}
+	if toolUses != toolResults {
+		t.Fatalf("tool uses=%d results=%d, pairing broken", toolUses, toolResults)
+	}
+	if notFound == 0 {
+		t.Fatalf("disabled tool should produce not-found results")
+	}
+}
+
 func TestStopLengthRecovery(t *testing.T) {
 	truncated := llm.FauxAssistant("partial")
 	truncated.StopReason = llm.StopLength
