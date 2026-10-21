@@ -21,12 +21,18 @@ type AnthropicProvider struct {
 }
 
 // NewAnthropicProvider 创建 Anthropic provider。
+// 默认端点为 https://api.anthropic.com，可用 WithBaseURL 指向 Anthropic 兼容网关。
 func NewAnthropicProvider(id string, models []Model, options ...ProviderOption) *AnthropicProvider {
+	httpCfg := newProviderHTTPConfig(options)
+	baseURL := "https://api.anthropic.com"
+	if httpCfg.baseURL != "" {
+		baseURL = httpCfg.baseURL
+	}
 	for i := range models {
 		models[i].Provider = id
-		models[i].BaseURL = "https://api.anthropic.com"
+		models[i].BaseURL = baseURL
 	}
-	return &AnthropicProvider{id: id, baseURL: "https://api.anthropic.com", models: models, http: newProviderHTTPConfig(options)}
+	return &AnthropicProvider{id: id, baseURL: baseURL, models: models, http: httpCfg}
 }
 
 func (p *AnthropicProvider) ID() string      { return p.id }

@@ -14,6 +14,7 @@ import (
 )
 
 type providerHTTPConfig struct {
+	baseURL string
 	client  *http.Client
 	retry   RetryPolicy
 	limiter RequestLimiter

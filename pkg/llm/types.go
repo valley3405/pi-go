@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -217,6 +218,16 @@ type RequestLimiter interface {
 
 // ProviderOption 在构造时配置 Provider；运行期间不再修改配置。
 type ProviderOption func(*providerHTTPConfig)
+
+// WithBaseURL 覆盖 Provider 的 API 端点（如 Anthropic 兼容网关）；
+// 空值保留该 Provider 的默认端点。
+func WithBaseURL(baseURL string) ProviderOption {
+	return func(cfg *providerHTTPConfig) {
+		if baseURL != "" {
+			cfg.baseURL = strings.TrimRight(baseURL, "/")
+		}
+	}
+}
 
 // WithHTTPClient 注入 HTTP client，用于代理、超时或自定义 Transport。
 // nil 保留默认 client；Provider 不会修改 client，调用方也不应在使用中修改它。

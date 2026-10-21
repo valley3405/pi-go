@@ -38,6 +38,14 @@ func Bash() agent.AgentTool {
 	}}
 }
 
+// BashInDir 返回固定工作目录为 dir 的 bash 工具；dir 为空时与 Bash() 相同。
+// 不经 Workspace，适用于无审批宿主、需要在工作区外执行命令的场景。
+func BashInDir(dir string) agent.AgentTool {
+	tool := Bash().(*bashTool)
+	tool.dir = dir
+	return tool
+}
+
 type bashTool struct {
 	baseTool
 	dir string
