@@ -205,6 +205,9 @@ func (m *Model) refreshTranscript(follow bool) {
 func (m Model) renderTranscript(width int) string {
 	if len(m.entries) == 0 {
 		welcome := "开始一段 coding session。\n\n输入消息与 agent 对话，输入 /help 查看会话命令。\n历史记录可用 PgUp/PgDn 或鼠标滚轮浏览。"
+		if width >= 60 {
+			welcome = agentLabelStyle.Render(bannerArt) + "\n\n" + welcome
+		}
 		return mutedStyle.Width(max(1, width)).Render(welcome)
 	}
 	var b strings.Builder
@@ -317,6 +320,15 @@ func renderMessage(label, body string, style *lipgloss.Style, width int) string 
 	}
 	return label + "\n" + bodyStyle.Width(width).MaxWidth(width).Render(body)
 }
+
+// bannerArt 是 TUI 空会话欢迎界面的 ASCII banner（宽度 <60 时不展示）。
+const bannerArt = `
+ _ __  _       __ _  ___
+| '_ \(_) ___ / _` + "`" + ` |/ _ \
+| .__/| ||___| (_| | (_) |
+| |   | |     \__, |\___/
+|_|   |_|    |___/
+`
 
 func singleLine(text string, limit int) string {
 	text = strings.Join(strings.Fields(text), " ")
