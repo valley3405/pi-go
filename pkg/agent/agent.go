@@ -306,19 +306,10 @@ func (a *Agent) Prompt(ctx context.Context, text string) error {
 
 // PromptMessages 以一批消息启动新 run。
 func (a *Agent) PromptMessages(ctx context.Context, messages []AgentMessage) error {
-	if err := a.beginRun(); err != nil {
+	runCtx, cancel, err := a.beginRun(ctx)
+	if err != nil {
 		return err
 	}
-	var runCtx context.Context
-	var cancel context.CancelFunc
-	if a.maxDuration > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, a.maxDuration)
-	} else {
-		runCtx, cancel = context.WithCancel(ctx)
-	}
-	a.runMu.Lock()
-	a.cancel = cancel
-	a.runMu.Unlock()
 
 	go func() {
 		defer cancel()
@@ -328,16 +319,26 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []AgentMessage) err
 	return nil
 }
 
-// beginRun 占用 run 槽位；返回错误表示已有活动 run。
-// 嵌套持有 runMu → mu（遵守锁顺序契约），使 run 槽位与 IsStreaming 等
-// 状态对观察者原子可见，避免出现 running==true 但 IsStreaming==false 的中间态。
-func (a *Agent) beginRun() error {
+// beginRun 占用 run 槽位，派生 run 上下文并记录 cancel；返回错误表示已有活动 run。
+// 嵌套持有 runMu → mu（遵守锁顺序契约），使 run 槽位、cancel 与 IsStreaming 等
+// 状态对观察者原子可见：beginRun 返回即保证 running==true、IsStreaming==true 且
+// a.cancel 就绪，此后 Abort() 必定命中本次 run，不存在 cancel 尚未赋值的窗口。
+// 返回派生的 runCtx 与 cancel，cancel 由调用方在 run 结束后释放。
+func (a *Agent) beginRun(ctx context.Context) (context.Context, context.CancelFunc, error) {
 	a.runMu.Lock()
 	defer a.runMu.Unlock()
 	if a.running {
-		return errors.New("agent is already processing a prompt; use Steer()/FollowUp() or wait for completion")
+		return nil, nil, errors.New("agent is already processing a prompt; use Steer()/FollowUp() or wait for completion")
+	}
+	var runCtx context.Context
+	var cancel context.CancelFunc
+	if a.maxDuration > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, a.maxDuration)
+	} else {
+		runCtx, cancel = context.WithCancel(ctx)
 	}
 	a.running = true
+	a.cancel = cancel
 	a.idleCh = make(chan struct{})
 	a.mu.Lock()
 	a.state.IsStreaming = true
@@ -345,7 +346,7 @@ func (a *Agent) beginRun() error {
 	a.state.ErrorMessage = ""
 	a.state.TerminationReason = ""
 	a.mu.Unlock()
-	return nil
+	return runCtx, cancel, nil
 }
 
 // finishRun 收尾：失败时合成错误消息并照常发事件（对应 pi 的 handleRunFailure），
