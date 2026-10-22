@@ -397,8 +397,13 @@ func (a *Agent) contextSnapshot() Context {
 }
 
 func (a *Agent) buildLoopConfig() loopConfig {
+	// Model 存于 mu 保护的 state 中，与 SetModel 并发时必须持锁读取；
+	// 其余字段构造后不可变，可无锁读取。
+	a.mu.Lock()
+	model := a.state.Model
+	a.mu.Unlock()
 	return loopConfig{
-		model:          a.state.Model,
+		model:          model,
 		toolExecution:  a.ToolExecution,
 		maxTurns:       a.maxTurns,
 		settlement:     a.settlement,
