@@ -66,6 +66,8 @@ type State struct {
 // Agent 是低层循环的有状态封装（对应 pi 的 Agent 类）：
 // 持有 transcript、发出生命周期事件、执行工具、提供 steering/follow-up 队列。
 type Agent struct {
+	// mu 保护 state 与 listeners。
+	// 锁顺序契约：同时持有两把锁时必须先 runMu 后 mu，全库不得出现 mu → runMu 的嵌套。
 	mu                 sync.Mutex
 	state              State
 	listeners          []listener
@@ -96,7 +98,9 @@ type Agent struct {
 	steeringQueue *pendingMessageQueue
 	followUpQueue *pendingMessageQueue
 
-	// 当前 run
+	// 当前 run。runMu 保护 run 生命周期，与 mu 嵌套持有时的顺序固定为 runMu → mu。
+	// 维持该顺序的关键点：emit 在释放 mu 之后才回调监听器（否则监听器内调
+	// IsRunning/Abort 会形成 mu → runMu）；finishRun 先释放 mu 再取 runMu。
 	runMu   sync.Mutex
 	cancel  context.CancelFunc
 	idleCh  chan struct{} // run 结束时 close
@@ -325,6 +329,8 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []AgentMessage) err
 }
 
 // beginRun 占用 run 槽位；返回错误表示已有活动 run。
+// 嵌套持有 runMu → mu（遵守锁顺序契约），使 run 槽位与 IsStreaming 等
+// 状态对观察者原子可见，避免出现 running==true 但 IsStreaming==false 的中间态。
 func (a *Agent) beginRun() error {
 	a.runMu.Lock()
 	defer a.runMu.Unlock()
